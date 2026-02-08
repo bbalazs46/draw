@@ -159,6 +159,9 @@
     <script>
         class DrawingApp {
             constructor() {
+                // Constants
+                this.DEGENERACY_THRESHOLD = 0.001;
+                
                 this.canvas = document.getElementById('drawingCanvas');
                 this.ctx = this.canvas.getContext('2d');
                 
@@ -464,7 +467,7 @@
                 
                 // Build system for x' = ax + cy + e
                 const det = x0 * (y1 - y2) - x1 * (y0 - y2) + x2 * (y0 - y1);
-                if (Math.abs(det) < 0.001) return null; // Degenerate case
+                if (Math.abs(det) < this.DEGENERACY_THRESHOLD) return null; // Degenerate case
                 
                 const a = ((to[0].x * (y1 - y2) - to[1].x * (y0 - y2) + to[2].x * (y0 - y1)) / det);
                 const c = ((x0 * (to[1].x - to[2].x) - x1 * (to[0].x - to[2].x) + x2 * (to[0].x - to[1].x)) / det);
@@ -485,7 +488,7 @@
                     // Use general matrix inverse for 3-finger transform
                     const m = this.transform.matrix;
                     const det = m[0] * m[3] - m[1] * m[2];
-                    if (Math.abs(det) > 0.001) {
+                    if (Math.abs(det) > this.DEGENERACY_THRESHOLD) {
                         const invDet = 1 / det;
                         const x = screenX - m[4];
                         const y = screenY - m[5];
@@ -594,9 +597,12 @@
                 const blob = new Blob([json], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
                 
+                const now = new Date();
+                const dateStr = now.toISOString().replace(/:/g, '-').split('.')[0];
+                
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `drawing_${Date.now()}.json`;
+                a.download = `drawing_${dateStr}.json`;
                 a.click();
                 
                 URL.revokeObjectURL(url);
@@ -611,9 +617,11 @@
                     try {
                         const data = JSON.parse(e.target.result);
                         
-                        if (data.strokes) {
-                            this.strokes = data.strokes;
+                        if (!data.strokes || !Array.isArray(data.strokes)) {
+                            throw new Error('Érvénytelen fájl formátum');
                         }
+                        
+                        this.strokes = data.strokes;
                         
                         if (data.transform) {
                             this.transform = data.transform;
@@ -624,9 +632,16 @@
                         }
                         
                         this.render();
-                        alert('Rajz betöltve!');
+                        alert(`Rajz betöltve! (${this.strokes.length} vonás)`);
                     } catch (err) {
-                        alert('Hiba a fájl betöltése során: ' + err.message);
+                        let errorMsg = 'Hiba a fájl betöltése során.';
+                        if (err.message.includes('JSON')) {
+                            errorMsg = 'Érvénytelen JSON fájl formátum.';
+                        } else if (err.message.includes('formátum')) {
+                            errorMsg = err.message;
+                        }
+                        alert(errorMsg);
+                        console.error('Load error:', err);
                     }
                 };
                 reader.readAsText(file);
