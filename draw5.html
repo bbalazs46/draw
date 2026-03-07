@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Végtelen vászon – vázlatfüzet</title>
+  <style>
+    :root { --bg:#0f1115; --panel:#151922; --muted:#9aa4b2; --text:#e6e9ef; --brand:#6ea8fe; --danger:#ff6b6b; --success:#7bd88f; --warning:#ffd166; --grid-major:rgba(255,255,255,.08); --grid-minor:rgba(255,255,255,.04); --accent:#7c7cff; }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;background:var(--bg);color:var(--text);overflow:hidden}
+    header{position:fixed;top:0;left:0;right:0;z-index:10;background:linear-gradient(180deg,rgba(0,0,0,.55),rgba(0,0,0,.15));backdrop-filter:blur(8px);border-bottom:1px solid rgba(255,255,255,.08)}
+    .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px}
+    .tools{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
+    .group{display:inline-flex;padding:4px;gap:4px;border:1px solid rgba(255,255,255,.1);background:var(--panel);border-radius:10px}
+    button,.btn{appearance:none;border:1px solid rgba(255,255,255,.12);background:#1b2030;color:var(--text);border-radius:8px;padding:8px 10px;cursor:pointer;font-weight:600}
+    button:hover{background:#22283b} button.active{outline:2px solid var(--brand);background:#1f2a47}
+    .danger{border-color:rgba(255,107,107,.35);color:#ffd9d9;background:#321e22}.danger:hover{background:#3b2328}
+    .success{border-color:rgba(123,216,143,.4);background:#1f2a23}
+    .readout{color:var(--muted);font-weight:600}
+    .row{display:inline-flex;align-items:center;gap:8px}
+    .slider{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;background:var(--panel);border-radius:8px;border:1px solid rgba(255,255,255,.1)}
+    input[type=range]{width:140px} input[type=color]{width:36px;height:28px;border:none;background:transparent}
+    input[type=password]{width:120px;padding:6px 8px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#1b2030;color:#e6e9ef}
+    select{height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#1b2030;color:#e6e9ef;padding:0 8px}
+    .wrap{position:absolute;inset:0;top:56px} .stage{position:absolute;inset:0}
+    canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+    #overlay{pointer-events:auto;cursor:crosshair}
+    .footer{position:fixed;bottom:8px;left:12px;right:12px;z-index:11;display:flex;justify-content:space-between;align-items:center;gap:12px;color:var(--muted);pointer-events:none}
+    .footer>*{pointer-events:auto}
+    .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;background:#1b2030;border:1px solid rgba(255,255,255,.2);border-bottom-width:2px;border-radius:6px;padding:2px 5px;font-size:12px}
+    .divider{width:1px;height:30px;background:rgba(255,255,255,.1);margin:0 6px}
+    details[open] summary~*{animation:fade .25s ease-out}@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+    [data-tip]{position:relative}[data-tip]:hover::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#111726;border:1px solid rgba(255,255,255,.12);padding:4px 6px;border-radius:6px;white-space:nowrap;color:#dfe6f3;font-size:12px}
+    .lightbox{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+    .lightbox.open{display:flex}
+    .lightbox .panel{background:#0f1115;border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:16px;max-width:min(90vw,960px);max-height:80vh}
+    .lightbox header{display:flex;justify-content:space-between;align-items:center;padding:0 0 8px 0;border:0;background:none;position:static;backdrop-filter:none}
+    .lightbox .name{font-weight:700;color:#e6e9ef}.lightbox .close{cursor:pointer;border:1px solid rgba(255,255,255,.2);background:#1b2030;padding:6px 10px;border-radius:8px}
+    #selClearBtn{position:fixed;right:12px;bottom:64px;z-index:12;display:none}
+    .toolbar .break{flex-basis:100%;height:0}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="toolbar">
+      <div class="tools">
+        <div class="group" role="group" aria-label="Eszközök">
+          <button id="tool-pencil" class="active" data-tip="Ceruza (B)">✏️</button>
+          <button id="tool-eraser" data-tip="Radír (E)">🧽</button>
+          <button id="tool-picker" data-tip="Pipetta (I)">🎯</button>
+          <button id="tool-select" data-tip="Kijelölés (S)">🔲</button>
+          <button id="tool-pin" data-tip="Fájlpont (P)">📎</button>
+        </div>
+        <div class="group">
+          <label class="row" data-tip="Szín"><span class="readout">Szín</span><input id="color" type="color" value="#ffb703"/></label>
+        </div>
+        <span class="break"></span>
+        <div class="group">
+          <div class="slider" data-tip="Ecsetméret (exp.)"><span class="readout">Ecset</span><input id="brush" type="range" min="0" max="100" value="30" /><span id="brushOut" class="readout">12 px</span></div>
+          <div class="slider" data-tip="Radír méret (exp.)"><span class="readout">Radír</span><input id="eraser" type="range" min="0" max="100" value="40" /><span id="eraserOut" class="readout">16 px</span></div>
+          <div class="slider" data-tip="Vonal sűrűség (−100…100%; negatív: halvány radír)"><span class="readout">Átlátszóság</span><input id="alpha" type="range" min="-100" max="100" value="100" /><span id="alphaOut" class="readout">100%</span></div>
+          <div class="row" data-tip="Ecset mértékegység"><span class="readout">Mérték</span><select id="brushUnit"><option value="screen" selected>Képernyő px</option><option value="world">Világ px</option></select></div>
+        </div>
+        <div class="group">
+          <label class="row" title="Érintéssel is lehessen rajzolni?"><input id="touchDraw" type="checkbox" /><span class="readout">Érintéssel rajzolás</span></label>
+        </div>
+        <div class="group" id="pinPanel" style="display:none">
+          <label class="row" data-tip="Fájlpont színe"><span class="readout">Pin szín</span><input id="pinColor" type="color" value="#7c7cff"/></label>
+          <div class="slider" data-tip="Pin mérete (6–32 px)"><span class="readout">Pin</span><input id="pinSize" type="range" min="6" max="32" value="12" /><span id="pinSizeOut" class="readout">12 px</span></div>
+          <label class="row"><span class="readout">Jelszó</span><input id="pinPass" type="password" placeholder="(opcionális)" /></label>
+          <input id="pinFile" type="file" style="display:none" />
+          <button id="pinChoose" class="btn">Fájl kiválasztása</button>
+          <button id="pinOpen" class="btn">Megnyitás</button>
+          <button id="pinReplace" class="btn">Fájl csere</button>
+          <button id="pinDelete" class="btn danger">Törlés</button>
+          <input id="pinReplaceFile" type="file" style="display:none" />
+        </div>
+        <div class="group" id="recPanel" style="display:none">
+          <button id="recBtn" class="btn">🎙️ Felvétel</button>
+          <span id="recStatus" class="readout">—</span>
+        </div>
+      </div>
+      <div class="tools">
+        <div class="group">
+          <button id="undo" class="btn" data-tip="Visszavonás (Ctrl+Z)">↶</button>
+          <button id="redo" class="btn" data-tip="Újra (Ctrl+Y)">↷</button>
+          <div class="divider"></div>
+          <button id="clear" class="btn danger" data-tip="Teljes törlés">🗑️ Törlés</button>
+        </div>
+      </div>
+      <div class="tools" style="margin-left:auto;">
+        <div class="group"><span class="readout">Zoom: <strong id="zoomOut">100%</strong></span></div>
+        <div class="group"><label class="row" title="A rács fix 50 VILÁGpx raszteren marad"><input id="gridLock" type="checkbox" /> <span class="readout">Rács fix 50 világ px</span></label></div>
+        <div class="group">
+          <button id="save" class="success">💾 Mentés</button>
+          <input id="loadFile" type="file" accept="application/json" style="display:none" />
+          <button id="load">📂 Betöltés</button>
+          <div class="divider"></div>
+          <button id="exportPng">🖼️ PNG</button>
+          <button id="exportTiles">🧩 Csempék</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="stage" id="stage">
+      <canvas id="grid"></canvas>
+      <canvas id="draw"></canvas>
+      <canvas id="pins"></canvas>
+      <canvas id="overlay"></canvas>
+    </div>
+  </div>
+
+  <div id="lightbox" class="lightbox"><div class="panel"><header><div class="name" id="lbName"></div><button class="close" id="lbClose">Bezár</button></header><div id="lbContent"></div></div></div>
+  <button id="selClearBtn" class="btn" title="Kijelölés törlése (Esc)">Kijelölés törlése</button>
+
+  <div class="footer">
+    <details><summary class="readout">Segítség & gyorsbillentyűk</summary>
+      <div style="background:rgba(0,0,0,.35);padding:8px 10px;border:1px solid rgba(255,255,255,.12);border-radius:8px">
+        <div><span class="kbd">B</span> ceruza • <span class="kbd">E</span> radír • <span class="kbd">I</span> pipetta • <span class="kbd">S</span> kijelölés • <span class="kbd">P</span> fájlpont • Görgő: zoom • Középső gomb: pan • Pinch: zoom/pan</div>
+        <div><span class="kbd">Ctrl+Z</span> visszavonás • <span class="kbd">Ctrl+Y</span> újra • <span class="kbd">Del</span> törlés</div>
+      </div>
+    </details>
+    <div class="readout">© 2025 Végtelen vászon</div>
+  </div>
+
+  <script>
+  (()=>{
+
+    const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    const grid = document.getElementById('grid');
+    const draw = document.getElementById('draw');
+    const pinsLayer = document.getElementById('pins');
+    const overlay = document.getElementById('overlay');
+    const stage = document.getElementById('stage');
+    const ctxG = grid.getContext('2d');
+    const ctx = draw.getContext('2d');
+    const ctxP = pinsLayer.getContext('2d');
+    const ctxO = overlay.getContext('2d');
+
+    // Lightbox
+    const lb = document.getElementById('lightbox');
+    const lbClose = document.getElementById('lbClose');
+    const lbContent = document.getElementById('lbContent');
+    const lbName = document.getElementById('lbName');
+    let lbJustOpenedAt = 0;
+    lbClose.addEventListener('click', ()=>{ lb.classList.remove('open'); lbContent.innerHTML=''; });
+    lb.addEventListener('click', (e)=>{ const now = Date.now(); if (now - lbJustOpenedAt < 300) return; if (e.target===lb) { lb.classList.remove('open'); lbContent.innerHTML=''; }});
+
+    // Állapot
+    let tool = 'pencil';
+    let color = '#ffb703';
+    let brushMode = 'screen'; // 'screen' | 'world'
+    let brushScreenPx = 12;   // ceruza képernyő px
+    let brushWorldPx = 4;     // ceruza világ px
+    let eraserScreenPx = 16;  // radír képernyő px
+    let eraserWorldPx = 6;    // radír világ px
+    let touchDraw = false;    // alapból ki
+    let alphaPct = 100;       // −100..100 (negatív: halvány radír)
+
+    // Rács fix 50 világ px
+    let gridLock50 = false;
+
+    // pinek
+    let pinColor = '#7c7cff'; let pinSizePx = 12; let pinPassword = '';
+    let pendingPinFile = null; let selectedPin = -1; let pinDrag = null;
+
+    // felvétel
+    let mediaRecorder = null, recChunks = [], recTimer = null, recStart = 0; let recordingPinIndex = null;
+
+    // kijelölés
+    let sel = null;
+
+    // nézet
+    let s = 1; let tx = 0, ty = 0;
+
+    // történet
+    const strokes = []; // {mode, color, useWorld, sizeWorld, sizeScreenPx, alpha, points:[{x,y}]}
+    const pins = [];   // {x,y,color,sizePx,name,type,dataUrl,password}
+    const undoStack = []; const redoStack = [];
+
+    // aktív rajz
+    let drawing = false; let last = null; let strokeUndoPending = false;
+
+    // intelligens radír
+    let erasing = false; let erasingDeleted = null; // Map(index->{index, stroke})
+
+    // pinch
+    let pinchStart = null; const activePointers = new Map();
+    function countTouchPointers(){ let n=0; for (const p of activePointers.values()) if (p.type==='touch') n++; return n; }
+
+    // UI refs
+    const $ = sel => document.querySelector(sel);
+    const toolButtons = { pencil: $('#tool-pencil'), eraser: $('#tool-eraser'), picker: $('#tool-picker'), select: $('#tool-select'), pin: $('#tool-pin') };
+    const zoomOut = $('#zoomOut');
+    const recBtn = $('#recBtn'); const recStatus = $('#recStatus');
+    const pinPanel = $('#pinPanel'); const recPanel = $('#recPanel');
+    const selClearBtn = $('#selClearBtn');
+    const brushUnit = $('#brushUnit');
+    const brushOut = $('#brushOut'); const eraserOut = $('#eraserOut'); const alphaOut = document.getElementById('alphaOut');
+
+    function updatePanels(){ const showPinStuff = tool==='pin' && !drawing; pinPanel.style.display = showPinStuff ? '' : 'none'; recPanel.style.display = showPinStuff ? '' : 'none'; updateSelButton(); }
+    function updateSelButton(){ selClearBtn.style.display = (tool==='select' && sel) ? '' : 'none'; }
+    selClearBtn.addEventListener('click', ()=>{ clearSelection(); updateSelButton(); });
+
+    // segédek
+    function resizeCanvas(){ for (const c of [grid, draw, pinsLayer, overlay]){ const rect = stage.getBoundingClientRect(); c.width = Math.round(rect.width*dpr); c.height = Math.round(rect.height*dpr); c.style.width = rect.width+'px'; c.style.height = rect.height+'px'; c.getContext('2d').setTransform(dpr,0,0,dpr,0,0);} redrawAll(); }
+    function worldToScreen(x,y){ return { x: x*s + tx, y: y*s + ty }; }
+    function getLocal(e){ const r = overlay.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+    function screenToWorld(x,y){ return { x: (x - tx)/s, y: (y - ty)/s }; }
+
+    function setTool(next){ tool = next; Object.values(toolButtons).forEach(b=>b.classList.remove('active')); (toolButtons[next]||{}).classList?.add('active'); if (next!=='select') clearSelection(); drawCursorPreview(lastMovePos); syncPinUI(); updatePanels(); }
+
+    // Exponenciális skála + inverz
+    function expSliderToPx(val){ const min=1, max=64; const t = val/100; const k = 4; return Math.round(min * Math.pow(max/min, Math.pow(t, 1/k))); }
+    function pxToExpSlider(px){ const min=1, max=64; const r = Math.max(min, Math.min(max, px)); const t = Math.log(r/min)/Math.log(max/min); const k = 4; const u = Math.pow(t, k); return Math.round(u*100); }
+
+    const deepCopy = (o)=> JSON.parse(JSON.stringify(o));
+    const pushUndo = (action)=>{ undoStack.push(action); redoStack.length=0; };
+
+    function updateBrushOut(){
+      brushOut.textContent = (brushMode==='screen')? `${brushScreenPx} px` : `${brushWorldPx} vpx`;
+      eraserOut.textContent = (brushMode==='screen')? `${eraserScreenPx} px` : `${eraserWorldPx} vpx`;
+      if (alphaOut) alphaOut.textContent = `${alphaPct}%`;
+    }
+
+    // UI bind
+    $('#color').addEventListener('input', e=>{ color=e.target.value; drawCursorPreview(lastMovePos); });
+    $('#brush').addEventListener('input', e=>{ const val=expSliderToPx(+e.target.value); if (brushMode==='screen') brushScreenPx=val; else brushWorldPx=val; updateBrushOut(); drawCursorPreview(lastMovePos); });
+    $('#eraser').addEventListener('input', e=>{ const val=expSliderToPx(+e.target.value); if (brushMode==='screen') eraserScreenPx=val; else eraserWorldPx=val; updateBrushOut(); drawCursorPreview(lastMovePos); });
+    $('#touchDraw').addEventListener('change', e=>{ touchDraw=e.target.checked; });
+    $('#alpha').addEventListener('input', e=>{ alphaPct = Math.max(-100, Math.min(100, +e.target.value)); updateBrushOut(); drawCursorPreview(lastMovePos); });
+    brushUnit.addEventListener('change', e=>{
+      brushMode=e.target.value;
+      const br = document.getElementById('brush');
+      const er = document.getElementById('eraser');
+      br.value = pxToExpSlider(brushMode==='screen'? brushScreenPx : brushWorldPx);
+      er.value = pxToExpSlider(brushMode==='screen'? eraserScreenPx : eraserWorldPx);
+      updateBrushOut(); drawCursorPreview(lastMovePos);
+    });
+
+    document.getElementById('gridLock').addEventListener('change', e=>{ gridLock50 = e.target.checked; redrawAll(); });
+
+    $('#tool-pencil').addEventListener('click', ()=> setTool('pencil'));
+    $('#tool-eraser').addEventListener('click', ()=> setTool('eraser'));
+    $('#tool-picker').addEventListener('click', ()=> setTool('picker'));
+    $('#tool-select').addEventListener('click', ()=> setTool('select'));
+    $('#tool-pin').addEventListener('click', ()=> setTool('pin'));
+
+    $('#undo').addEventListener('click', doUndo); $('#redo').addEventListener('click', doRedo);
+    $('#clear').addEventListener('click', ()=>{ if(confirm('Biztosan törlöd az egész rajzot?')){ strokes.length=0; pins.length=0; undoStack.length=0; redoStack.length=0; selectedPin=-1; clearSelection(); redrawAll(); updateSelButton(); }});
+
+    $('#save').addEventListener('click', saveProject);
+    $('#load').addEventListener('click', ()=> $('#loadFile').click());
+    $('#loadFile').addEventListener('change', loadProject);
+    $('#exportPng').addEventListener('click', exportPNG);
+    $('#exportTiles').addEventListener('click', exportTiles);
+
+    // pin UI
+    $('#pinChoose').addEventListener('click', ()=> $('#pinFile').click());
+    $('#pinFile').addEventListener('change', async (e)=>{ const f=e.target.files[0]; if(!f) return; pendingPinFile = await fileToDataUrl(f); e.target.value=''; setTool('pin'); });
+    $('#pinColor').addEventListener('input', e=>{ if (selectedPin>=0){ pins[selectedPin].color=e.target.value; drawPins(); } else { pinColor=e.target.value; } });
+    $('#pinSize').addEventListener('input', e=>{ const v=+e.target.value; document.getElementById('pinSizeOut').textContent=v+' px'; if (selectedPin>=0){ pins[selectedPin].sizePx=v; drawPins(); } else { pinSizePx=v; } });
+    $('#pinPass').addEventListener('input', e=>{ if (selectedPin>=0) pins[selectedPin].password=e.target.value||null; else pinPassword=e.target.value; });
+
+    $('#pinOpen').addEventListener('click', ()=>{ if (selectedPin>=0) openPin(selectedPin); });
+    $('#pinReplace').addEventListener('click', ()=>{ if (selectedPin>=0) $('#pinReplaceFile').click(); });
+    $('#pinDelete').addEventListener('click', ()=>{ if (selectedPin>=0){ const removed=pins.splice(selectedPin,1)[0]; pushUndo({type:'pin-delete', index:selectedPin, pin:deepCopy(removed)}); selectedPin=-1; drawPins(); }});
+    $('#pinReplaceFile').addEventListener('change', async (e)=>{ const f=e.target.files[0]; if(!f||selectedPin<0) return; const info=await fileToDataUrl(f); const p=pins[selectedPin]; p.name=info.name; p.type=info.type; p.dataUrl=info.dataUrl; e.target.value=''; });
+
+    // felvétel
+    const getPreferredAudioMime=()=> (MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported('audio/webm'))?'audio/webm':(MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported('audio/ogg'))?'audio/ogg':'';
+    const fmtTime=(s)=>{const m=Math.floor(s/60),ss=(s%60).toString().padStart(2,'0');return `${m}:${ss}`};
+    function setRecordingUI(on){ if(on){ recBtn.textContent='⏹️ Leállítás'; recStatus.textContent='REC 00:00'; recStatus.style.color='#ffd166'; } else { recBtn.textContent='🎙️ Felvétel'; recStatus.textContent='—'; recStatus.style.color=''; if(recTimer) clearInterval(recTimer); recTimer=null; } }
+    recBtn.addEventListener('click', async ()=>{
+      if (!mediaRecorder || mediaRecorder.state==='inactive'){
+        try{
+          const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+          recChunks=[]; const mime=getPreferredAudioMime();
+          mediaRecorder=new MediaRecorder(stream,{mimeType:mime});
+          mediaRecorder.ondataavailable=ev=>{ if(ev.data&&ev.data.size) recChunks.push(ev.data); };
+          mediaRecorder.onstop=async()=>{
+            const blob=new Blob(recChunks,{type:mediaRecorder.mimeType});
+            const name='felvetel_'+new Date().toISOString().replace(/[:.]/g,'-')+(blob.type.includes('webm')?'.webm':'.ogg');
+            const dataUrl=await blobToDataURL(blob);
+            if (recordingPinIndex!=null&&pins[recordingPinIndex]){ const p=pins[recordingPinIndex]; p.name=name; p.type=blob.type; p.dataUrl=dataUrl; drawPins(); }
+            else { pendingPinFile={name,type:blob.type,dataUrl}; setTool('pin'); }
+            setRecordingUI(false); for (const t of stream.getTracks()) t.stop(); recordingPinIndex=null;
+          };
+          mediaRecorder.start(); recStart=Date.now(); setRecordingUI(true);
+          recTimer=setInterval(()=>{ const t=Math.floor((Date.now()-recStart)/1000); recStatus.textContent='REC '+fmtTime(t); },250);
+          setTool('pin');
+        }catch(err){ alert('Nem sikerült elindítani a felvételt: '+err.message); setRecordingUI(false); }
+      } else if (mediaRecorder.state==='recording') { mediaRecorder.stop(); }
+    });
+
+    window.addEventListener('resize', resizeCanvas);
+
+    // gyorsbillentyűk
+    window.addEventListener('keydown', e=>{
+      if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase()==='z'){ e.preventDefault(); doUndo(); }
+      else if ((e.ctrlKey && (e.key.toLowerCase()==='y' || (e.shiftKey && e.key.toLowerCase()==='z')))) { e.preventDefault(); doRedo(); }
+      else if (e.key.toLowerCase()==='b'){ setTool('pencil'); }
+      else if (e.key.toLowerCase()==='e'){ setTool('eraser'); }
+      else if (e.key.toLowerCase()==='i'){ setTool('picker'); }
+      else if (e.key.toLowerCase()==='s'){ setTool('select'); }
+      else if (e.key.toLowerCase()==='p'){ setTool('pin'); }
+      else if (e.key==='Escape'){ clearSelection(); updateSelButton(); }
+      else if (e.key==='Delete'){
+        if (selectedPin>=0){ const removed=pins.splice(selectedPin,1)[0]; pushUndo({type:'pin-delete', index:selectedPin, pin:deepCopy(removed)}); selectedPin=-1; drawPins(); }
+        else if (sel){ const snapshot=captureSelectionSnapshot(sel); deleteSelection(sel); pushUndo({type:'sel-delete', snapshot}); clearSelection(); redrawAll(); } else { strokes.length=0; pins.length=0; undoStack.length=0; redoStack.length=0; redrawAll(); }
+        updateSelButton();
+      }
+    });
+
+    // pointer
+    let lastMovePos=null; let panStart=null;
+    overlay.addEventListener('pointerdown', onPointerDown);
+    overlay.addEventListener('pointermove', onPointerMove);
+    overlay.addEventListener('pointerup', onPointerUp);
+    overlay.addEventListener('pointercancel', onPointerUp);
+    overlay.addEventListener('pointerout', onPointerUp);
+    overlay.addEventListener('wheel', onWheel, { passive:false });
+
+    function onPointerDown(e){
+      const local=getLocal(e);
+      overlay.setPointerCapture(e.pointerId);
+      activePointers.set(e.pointerId,{x:local.x,y:local.y,type:e.pointerType});
+
+      if (tool==='select'){
+        if (sel && pointInRect(local.x,local.y,rectToScreen(sel))){ sel.moving={startX:local.x,startY:local.y}; return; }
+        const w=screenToWorld(local.x,local.y); sel={x0:w.x,y0:w.y,x1:w.x,y1:w.y,moving:null}; drawSelection(); updateSelButton(); return;
+      }
+
+      const hit=hitTestPin(local.x,local.y);
+      if (tool==='pin'){
+        if (hit!=null){ selectedPin=hit; const p=pins[hit]; const w=screenToWorld(local.x,local.y); pinDrag={idx:hit,offx:w.x-p.x,offy:w.y-p.y,startX:p.x,startY:p.y}; syncPinUI(); drawPins(); return; }
+        if (mediaRecorder && mediaRecorder.state==='recording' && recordingPinIndex==null){ const pt=screenToWorld(local.x,local.y); const pinObj={x:pt.x,y:pt.y,color:pinColor,sizePx:pinSizePx,name:'Felvétel…',type:'audio/*',dataUrl:'',password:pinPassword||null}; pins.push(pinObj); selectedPin=pins.length-1; recordingPinIndex=selectedPin; drawPins(); pushUndo({type:'pin-add',index:selectedPin,pin:deepCopy(pinObj)}); return; }
+        if (!pendingPinFile){ document.getElementById('pinFile').click(); return; }
+        const pt=screenToWorld(local.x,local.y); const newPin={x:pt.x,y:pt.y,color:pinColor,sizePx:pinSizePx,name:pendingPinFile.name,type:pendingPinFile.type,dataUrl:pendingPinFile.dataUrl,password:pinPassword||null}; pins.push(newPin); selectedPin=pins.length-1; pushUndo({type:'pin-add',index:selectedPin,pin:deepCopy(newPin)}); pendingPinFile=null; syncPinUI(); drawPins(); return;
+      } else if (hit!=null){ openPin(hit); return; }
+
+      if (e.button===1){ panStart={x:local.x,y:local.y,tx,ty}; return; }
+      if (e.pointerType==='touch' && !touchDraw){ return; }
+      if (countTouchPointers()===2){ return; }
+
+      const pt=screenToWorld(local.x,local.y);
+      if (tool==='picker'){ const col=sampleColorAt(local.x,local.y); if (col){ color=col; document.getElementById('color').value=col; setTool('pencil'); } return; }
+
+      if (tool==='pencil'){
+        drawing=true; updatePanels();
+        const mode='draw';
+        const useWorld=(brushMode==='world');
+        let sizeWorld=null, sizeScreenPx=null;
+        if (useWorld){ sizeWorld=brushWorldPx; } else { sizeScreenPx=brushScreenPx; }
+        const stroke={ mode, color, useWorld, sizeWorld, sizeScreenPx, alpha:(alphaPct/100), points:[pt] };
+        strokes.push(stroke); last=pt; strokeUndoPending=true; drawLive(true); drawCursorPreview(local);
+      } else if (tool==='eraser'){
+        // intelligens radír: érintett teljes stroke törlése
+        erasing=true; erasingDeleted = new Map();
+        eraseAtPoint(pt);
+      }
+    }
+
+    function onPointerMove(e){
+      const local=getLocal(e);
+      lastMovePos={x:local.x,y:local.y};
+      activePointers.set(e.pointerId,{x:local.x,y:local.y,type:e.pointerType});
+      if (countTouchPointers()===2){ pinchUpdate(); drawCursorPreview(local); return; }
+
+      if (tool==='select' && sel){
+        if (sel.moving){ const dxs=local.x-sel.moving.startX; const dys=local.y-sel.moving.startY; const dx=dxs/s; const dy=dys/s; moveSelectionPreview(sel,dx,dy); drawSelection(); return; }
+        else { const w=screenToWorld(local.x,local.y); sel.x1=w.x; sel.y1=w.y; drawSelection(); return; }
+      }
+
+      if (pinDrag){ const w=screenToWorld(local.x,local.y); const p=pins[pinDrag.idx]; p.x=w.x-pinDrag.offx; p.y=w.y-pinDrag.offy; drawPins(); return; }
+
+      if (panStart && e.buttons===4){ const dx=local.x-panStart.x; const dy=local.y-panStart.y; tx=panStart.tx+dx; ty=panStart.ty+dy; redrawAll(); drawCursorPreview(local); return; }
+      if (tool==='eraser' && erasing){ const pt=screenToWorld(local.x,local.y); eraseAtPoint(pt); drawCursorPreview(local); return; }
+
+      if (!drawing){ drawCursorPreview(local); return; }
+      if (e.pointerType==='touch' && !touchDraw){ return; }
+
+      const pt=screenToWorld(local.x,local.y);
+      if (last && (Math.hypot(pt.x-last.x,pt.y-last.y) < (1/s))){ drawCursorPreview(local); return; }
+      const stroke=strokes[strokes.length-1]; stroke.points.push(pt); last=pt; drawLive(false); drawCursorPreview(local);
+    }
+
+    function onPointerUp(e){
+      const local=getLocal(e);
+      activePointers.delete(e.pointerId);
+      if (panStart && e.button===1){ panStart=null; return; }
+      if (countTouchPointers()<2) pinchStart=null;
+
+      if (tool==='select' && sel){
+        if (sel.moving){ const dx=(local.x-sel.moving.startX)/s; const dy=(local.y-sel.moving.startY)/s; finalizeMoveSelection(sel,dx,dy); sel.moving=null; drawSelection(); }
+        else { computeSelectionItems(sel); drawSelection(); }
+      }
+
+      if (pinDrag){ const p=pins[pinDrag.idx]; if (Math.hypot(p.x-pinDrag.startX,p.y-pinDrag.startY)>0){ pushUndo({type:'pin-move',index:pinDrag.idx,from:{x:pinDrag.startX,y:pinDrag.startY},to:{x:p.x,y:p.y}}); } pinDrag=null; }
+
+      if (tool==='eraser' && erasing){ const items = Array.from(erasingDeleted.values()); if (items.length){ pushUndo({type:'stroke-delete-batch', items}); } erasing=false; erasingDeleted=null; }
+
+      if (strokeUndoPending){ const st=deepCopy(strokes[strokes.length-1]); pushUndo({type:'stroke-add',stroke:st}); strokeUndoPending=false; }
+      drawing=false; updatePanels(); last=null; drawCursorPreview(lastMovePos);
+    }
+
+    // Zoom & grid
+    function startPinch(){ const pts=Array.from(activePointers.values()).filter(p=>p.type==='touch'); if (pts.length!==2) return null; const [p1,p2]=pts; const cx=(p1.x+p2.x)/2, cy=(p1.y+p2.y)/2; const dist=Math.hypot(p1.x-p2.x,p1.y-p2.y); return { dist, s, tx, ty, cx, cy }; }
+    function pinchUpdate(){ const pts=Array.from(activePointers.values()).filter(p=>p.type==='touch'); if (pts.length!==2) return; if (!pinchStart) pinchStart=startPinch(); const [p1,p2]=pts; const cx=(p1.x+p2.x)/2, cy=(p1.y+p2.y)/2; const dist=Math.hypot(p1.x-p2.x,p1.y-p2.y); const factor=dist/pinchStart.dist; const newS=clamp(pinchStart.s*factor,1e-6,1e6); const wx=(pinchStart.cx-pinchStart.tx)/pinchStart.s; const wy=(pinchStart.cy-pinchStart.ty)/pinchStart.s; s=newS; tx=cx-wx*s; ty=cy-wy*s; redrawAll(); drawSelection(); updateBrushOut(); drawCursorPreview(lastMovePos); }
+    function onWheel(e){ e.preventDefault(); const local=getLocal(e); const factor=Math.exp(-e.deltaY*0.0015); zoomAt(local.x,local.y,factor); }
+    function zoomAt(cx,cy,factor){ const newS=clamp(s*factor,1e-6,1e6); const wx=(cx-tx)/s; const wy=(cy-ty)/s; s=newS; tx=cx-wx*s; ty=cy-wy*s; redrawAll(); drawSelection(); updateBrushOut(); drawCursorPreview(lastMovePos); }
+    function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+
+    function chooseNiceStep(worldTarget){ const base=[1,2,5]; const t=Math.max(worldTarget,1e-9); const pow=Math.floor(Math.log10(t)); let best=1*Math.pow(10,pow),bestDiff=Infinity; for(let k=-1;k<=1;k++){ for(const b of base){ const step=b*Math.pow(10,pow+k); const diff=Math.abs(step-t); if(diff<bestDiff){best=step;bestDiff=diff;} } } return best; }
+
+    // Drawing
+    function strokeLineWidth(st){ return st.useWorld ? (st.sizeWorld??1) : (st.sizeScreenPx??1); }
+    function strokeComposite(st){ const a = (st.alpha==null)? 1 : st.alpha; return { op: (a>=0)? 'source-over' : 'destination-out', ga: Math.min(1, Math.abs(a)) }; }
+    function drawLive(isStart){ const stroke=strokes[strokes.length-1]; ctx.save(); ctx.setTransform(dpr*s,0,0,dpr*s,dpr*tx,dpr*ty); ctx.lineWidth=strokeLineWidth(stroke); const comp=strokeComposite(stroke); ctx.globalCompositeOperation=comp.op; ctx.globalAlpha=comp.ga; ctx.lineJoin='round'; ctx.lineCap='round'; const pts=stroke.points; if (isStart||pts.length===1){ const p=pts[0]; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+0.001,p.y+0.001); ctx.strokeStyle=stroke.color; ctx.stroke(); } else { const p1=pts[pts.length-2]; const p2=pts[pts.length-1]; ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.strokeStyle=stroke.color; ctx.stroke(); } ctx.restore(); }
+
+    function redrawAll(){
+      ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,draw.width/dpr,draw.height/dpr);
+      drawGrid();
+      ctx.save();
+      ctx.setTransform(dpr*s,0,0,dpr*s,dpr*tx,dpr*ty);
+      ctx.lineJoin='round'; ctx.lineCap='round';
+      for(const st of strokes){
+        ctx.lineWidth=strokeLineWidth(st);
+        const comp=strokeComposite(st); ctx.globalCompositeOperation=comp.op; ctx.globalAlpha=comp.ga;
+        const pts=st.points;
+        if (Math.abs(st.alpha||1)===1){
+          ctx.beginPath(); for (let i=0;i<pts.length;i++){ const p=pts[i]; if(i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);} ctx.strokeStyle=st.color; ctx.stroke();
+        } else {
+          if (pts.length===1){ const p=pts[0]; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+0.001,p.y+0.001); ctx.strokeStyle=st.color; ctx.stroke(); }
+          else { for (let i=1;i<pts.length;i++){ const a=pts[i-1], b=pts[i]; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.strokeStyle=st.color; ctx.stroke(); } }
+        }
+      }
+      ctx.restore();
+      drawPins();
+      zoomOut.textContent=Math.round(s*100)+'%';
+    }
+
+    function drawGrid(){
+      ctxG.setTransform(dpr,0,0,dpr,0,0);
+      ctxG.clearRect(0,0,grid.width/dpr,grid.height/dpr);
+      const w=grid.width/dpr,h=grid.height/dpr; let worldMinor,worldMajor;
+      if (gridLock50){ worldMinor=50; worldMajor=500; }
+      else { const targetMinorPx=32; worldMinor=chooseNiceStep(targetMinorPx/s); worldMajor=worldMinor*10; }
+      const tl=screenToWorld(0,0); const br=screenToWorld(w,h);
+      const xStartMinor=Math.floor(tl.x/worldMinor)*worldMinor;
+      const yStartMinor=Math.floor(tl.y/worldMinor)*worldMinor;
+      const xStartMajor=Math.floor(tl.x/worldMajor)*worldMajor;
+      const yStartMajor=Math.floor(tl.y/worldMajor)*worldMajor;
+      ctxG.save(); ctxG.setTransform(dpr*s,0,0,dpr*s,dpr*tx,dpr*ty);
+      ctxG.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--grid-minor');
+      ctxG.lineWidth=1/s; ctxG.beginPath();
+      for (let x=xStartMinor; x<br.x; x+=worldMinor){ ctxG.moveTo(x,tl.y); ctxG.lineTo(x,br.y);}
+      for (let y=yStartMinor; y<br.y; y+=worldMinor){ ctxG.moveTo(tl.x,y); ctxG.lineTo(br.x,y);}
+      ctxG.stroke();
+      ctxG.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--grid-major');
+      ctxG.lineWidth=1.5/s; ctxG.beginPath();
+      for (let x=xStartMajor; x<br.x; x+=worldMajor){ ctxG.moveTo(x,tl.y); ctxG.lineTo(x,br.y);}
+      for (let y=yStartMajor; y<br.y; y+=worldMajor){ ctxG.moveTo(tl.x,y); ctxG.lineTo(br.x,y);}
+      ctxG.stroke(); ctxG.restore();
+    }
+
+    // Pins
+    function drawPins(){ ctxP.setTransform(dpr,0,0,dpr,0,0); ctxP.clearRect(0,0,pinsLayer.width/dpr,pinsLayer.height/dpr); for(let i=0;i<pins.length;i++){ const p=pins[i]; const sc=worldToScreen(p.x,p.y); ctxP.save(); ctxP.beginPath(); ctxP.arc(sc.x,sc.y,p.sizePx/2,0,Math.PI*2); ctxP.fillStyle=(p.color||'#7c7cff')+'33'; ctxP.fill(); ctxP.lineWidth=2; ctxP.strokeStyle=p.color||'#7c7cff'; ctxP.stroke(); if(i===selectedPin){ ctxP.beginPath(); ctxP.setLineDash([4,4]); ctxP.arc(sc.x,sc.y,p.sizePx/2+4,0,Math.PI*2); ctxP.strokeStyle='#ffd166'; ctxP.lineWidth=2; ctxP.stroke(); ctxP.setLineDash([]);} ctxP.restore(); } drawSelection(); }
+    function hitTestPin(sx,sy){ for(let i=pins.length-1;i>=0;i--){ const p=pins[i]; const sc=worldToScreen(p.x,p.y); const r=p.sizePx/2; if (Math.hypot(sx-sc.x,sy-sc.y) <= r+4) return i; } return null; }
+
+    // Selection
+    function pointInRect(sx,sy,r){ return sx>=r.x&&sy>=r.y&&sx<=r.x+r.w&&sy<=r.y+r.h; }
+    function rectToScreen(r){ const a=worldToScreen(Math.min(r.x0,r.x1),Math.min(r.y0,r.y1)); const b=worldToScreen(Math.max(r.x0,r.x1),Math.max(r.y0,r.y1)); return {x:a.x,y:a.y,w:b.x-a.x,h:b.y-a.y}; }
+    function drawSelection(){ ctxO.setTransform(dpr,0,0,dpr,0,0); ctxO.clearRect(0,0,overlay.width/dpr,overlay.height/dpr); if(!sel) return; const r=rectToScreen(sel); ctxO.save(); ctxO.strokeStyle='#7c7cff'; ctxO.setLineDash([6,4]); ctxO.lineWidth=2; ctxO.strokeRect(r.x,r.y,r.w,r.h); ctxO.fillStyle='#7c7cff22'; ctxO.fillRect(r.x,r.y,r.w,r.h); ctxO.restore(); }
+    function computeSelectionItems(r){ r.items={strokes:new Set(),pins:new Set()}; for(let i=0;i<strokes.length;i++){ const st=strokes[i]; for(const p of st.points){ const sc=worldToScreen(p.x,p.y); if(pointInRect(sc.x,sc.y,rectToScreen(r))){ r.items.strokes.add(i); break; } } } for(let i=0;i<pins.length;i++){ const p=pins[i]; const sc=worldToScreen(p.x,p.y); if(pointInRect(sc.x,sc.y,rectToScreen(r))) r.items.pins.add(i); } }
+    function moveSelectionPreview(r,dx,dy){ if(!r.items) computeSelectionItems(r); for(const i of r.items.strokes){ for(const p of strokes[i].points){ p.x+=dx; p.y+=dy; } } for(const i of r.items.pins){ pins[i].x+=dx; pins[i].y+=dy; } r.moving.startX+=dx*s; r.moving.startY+=dy*s; redrawAll(); }
+    function finalizeMoveSelection(r,dx,dy){ if(!r.items) computeSelectionItems(r); pushUndo({type:'sel-move',delta:{dx,dy},items:snapshotItemIndices(r)}); }
+    function snapshotItemIndices(r){ return { strokes:Array.from(r.items.strokes), pins:Array.from(r.items.pins) }; }
+    function captureSelectionSnapshot(r){ return { items:snapshotItemIndices(r), strokes:deepCopy(strokes.filter((_,i)=>r.items.strokes.has(i))), pins:deepCopy(pins.filter((_,i)=>r.items.pins.has(i))) }; }
+    function deleteSelection(r){ const keepStroke=strokes.map((_,i)=>!r.items.strokes.has(i)); for(let i=strokes.length-1;i>=0;i--) if(!keepStroke[i]) strokes.splice(i,1); const keepPin=pins.map((_,i)=>!r.items.pins.has(i)); for(let i=pins.length-1;i>=0;i--) if(!keepPin[i]) pins.splice(i,1); }
+    function clearSelection(){ sel=null; drawSelection(); }
+
+    // intelligens radír segédek
+    function effectiveEraserRadiusWorld(){ return (brushMode==='world') ? (eraserWorldPx/2) : (eraserScreenPx/2)/s; }
+    function strokeHalfWidthWorld(st){ return st.useWorld ? (st.sizeWorld||1)/2 : (st.sizeScreenPx||1)/(2*s); }
+    function distPointToSegment(px,py, x1,y1, x2,y2){ const vx=x2-x1, vy=y2-y1; const wx=px-x1, wy=py-y1; const c1=vx*wx+vy*wy; if (c1<=0) return Math.hypot(px-x1,py-y1); const c2=vx*vx+vy*vy; if (c2<=c1) return Math.hypot(px-x2,py-y2); const b=c1/c2; const bx=x1+b*vx, by=y1+b*vy; return Math.hypot(px-bx,py-by); }
+    function eraseAtPoint(pt){ const r = effectiveEraserRadiusWorld(); const toDelete = []; for (let i=0;i<strokes.length;i++){ const st = strokes[i]; if (!st || st.mode!=='draw') continue; const hw = strokeHalfWidthWorld(st); const thresh = r + hw; const pts = st.points; for (let j=1;j<pts.length;j++){ if (distPointToSegment(pt.x,pt.y, pts[j-1].x,pts[j-1].y, pts[j].x,pts[j].y) <= thresh){ toDelete.push(i); break; } } }
+      if (!toDelete.length) return; toDelete.sort((a,b)=>b-a); if (!erasingDeleted) erasingDeleted = new Map(); for (const idx of toDelete){ if (!erasingDeleted.has(idx)){ erasingDeleted.set(idx,{ index: idx, stroke: deepCopy(strokes[idx]) }); } strokes.splice(idx,1); } redrawAll(); }
+
+    // Open pin
+    async function openPin(idx){ const p=pins[idx]; if(!p) return; if(p.password){ const given=prompt('Add meg a jelszót a megnyitáshoz:'); if(given!==p.password){ alert('Hibás jelszó.'); return; } } if(!p.dataUrl){ alert('Ez a pin még nem tartalmaz fájlt.'); return; } if (p.type && p.type.startsWith('audio/')){ lbName.textContent=p.name||'Felvétel'; lbContent.innerHTML=''; const audio=document.createElement('audio'); audio.controls=true; audio.autoplay=true; audio.src=p.dataUrl; audio.style.width='min(80vw,720px)'; lbContent.appendChild(audio); lb.classList.add('open'); lbJustOpenedAt=Date.now(); return; } const w=window.open(p.dataUrl,'_blank'); if(!w) alert('A böngésző blokkolta a megnyitást.'); }
+
+    // Export / Save
+    function saveProject(){ const data={version:13, view:{s,tx,ty}, strokes, pins}; const blob=new Blob([JSON.stringify(data)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='projekt.json'; a.click(); URL.revokeObjectURL(a.href); }
+    function loadProject(e){ const file=e.target.files[0]; if(!file) return; const fr=new FileReader(); fr.onload=()=>{ try{ const data=JSON.parse(fr.result); if(data.view){ s=data.view.s||1; tx=data.view.tx||0; ty=data.view.ty||0; } if(Array.isArray(data.strokes)){ strokes.length=0; for(const st of data.strokes){ if(st.useWorld===undefined){ st.useWorld=!!st.sizeWorld; } if (st.alpha==null) st.alpha=1; strokes.push(st); } } if(Array.isArray(data.pins)){ pins.length=0; for(const p of data.pins) pins.push(p); } redoStack.length=0; undoStack.length=0; redrawAll(); }catch(err){ alert('Hibás fájl.'); } }; fr.readAsText(file); e.target.value=''; }
+
+    function exportPNG(){
+      const w=draw.width,h=draw.height;
+      const tmp=document.createElement('canvas'); tmp.width=w; tmp.height=h; const c=tmp.getContext('2d');
+      // Grid
+      c.drawImage(grid,0,0);
+      // Strokes
+      c.save(); c.setTransform(dpr*s,0,0,dpr*s,dpr*tx,dpr*ty); c.lineJoin='round'; c.lineCap='round';
+      for(const st of strokes){
+        c.lineWidth=strokeLineWidth(st);
+        const comp=strokeComposite(st); c.globalCompositeOperation=comp.op; c.globalAlpha=comp.ga;
+        const pts=st.points;
+        if (Math.abs(st.alpha||1)===1){
+          c.beginPath(); for(let i=0;i<pts.length;i++){ const p=pts[i]; if(i===0) c.moveTo(p.x,p.y); else c.lineTo(p.x,p.y);} c.strokeStyle=st.color; c.stroke();
+        } else {
+          if (pts.length===1){ const p=pts[0]; c.beginPath(); c.moveTo(p.x,p.y); c.lineTo(p.x+0.001,p.y+0.001); c.strokeStyle=st.color; c.stroke(); }
+          else { for(let i=1;i<pts.length;i++){ const a=pts[i-1], b=pts[i]; c.beginPath(); c.moveTo(a.x,a.y); c.lineTo(b.x,b.y); c.strokeStyle=st.color; c.stroke(); } }
+        }
+      }
+      c.restore();
+      // Pins
+      c.drawImage(pinsLayer,0,0);
+      tmp.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='export.png'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); });
+    }
+
+    function computeBounds(){ if(!strokes.length) return {minX:0,minY:0,maxX:0,maxY:0}; let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity; for(const st of strokes){ for(const p of st.points){ if(p.x<minX) minX=p.x; if(p.y<minY) minY=p.y; if(p.x>maxX) maxX=p.x; if(p.y>maxY) maxY=p.y; } } return {minX,minY,maxX,maxY}; }
+
+    function exportTiles(){
+      if(!strokes.length){ alert('Nincs mit exportálni.'); return; }
+      const tileWorld=parseFloat(prompt('Csempe méret (világ px):','1024')); if(!tileWorld||tileWorld<=0) return;
+      const overlap=parseFloat(prompt('Átfedés (világ px):','0'))||0;
+      const b=computeBounds(); const pad=32;
+      const minX=Math.floor((b.minX-pad)/tileWorld)*tileWorld;
+      const minY=Math.floor((b.minY-pad)/tileWorld)*tileWorld;
+      const maxX=Math.ceil((b.maxX+pad)/tileWorld)*tileWorld;
+      const maxY=Math.ceil((b.maxY+pad)/tileWorld)*tileWorld;
+      const tiles=[]; const scale=1;
+      for(let y=minY;y<maxY;y+=(tileWorld-overlap)){
+        for(let x=minX;x<maxX;x+=(tileWorld-overlap)){
+          const cw=Math.min(tileWorld,maxX-x);
+          const ch=Math.min(tileWorld,maxY-y);
+          const canvas=document.createElement('canvas');
+          canvas.width=Math.round(cw*scale);
+          canvas.height=Math.round(ch*scale);
+          const c=canvas.getContext('2d');
+          c.fillStyle='#0f1115'; c.fillRect(0,0,canvas.width,canvas.height);
+          c.save(); c.scale(scale,scale); drawGridIntoContext(c,x,y,cw,ch,1); c.restore();
+          c.save(); c.scale(scale,scale); c.translate(-x,-y); c.lineJoin='round'; c.lineCap='round';
+          for(const st of strokes){
+            const comp=strokeComposite(st); c.globalCompositeOperation=comp.op; c.globalAlpha=comp.ga;
+            c.lineWidth=st.useWorld?(st.sizeWorld||1):(st.sizeScreenPx||1);
+            const pts=st.points;
+            if (Math.abs(st.alpha||1)===1){
+              c.beginPath(); for(let i=0;i<pts.length;i++){ const p=pts[i]; if(i===0) c.moveTo(p.x,p.y); else c.lineTo(p.x,p.y);} c.strokeStyle=st.color; c.stroke();
+            } else {
+              if (pts.length===1){ const p=pts[0]; c.beginPath(); c.moveTo(p.x,p.y); c.lineTo(p.x+0.001,p.y+0.001); c.strokeStyle=st.color; c.stroke(); }
+              else { for(let i=1;i<pts.length;i++){ const a=pts[i-1], b=pts[i]; c.beginPath(); c.moveTo(a.x,a.y); c.lineTo(b.x,b.y); c.strokeStyle=st.color; c.stroke(); } }
+            }
+          }
+          c.restore();
+          c.save(); c.scale(scale,scale);
+          for(const p of pins){ const sx=p.x-x, sy=p.y-y; if(sx>=-32&&sy>=-32&&sx<=cw+32&&sy<=ch+32){ c.beginPath(); c.arc(sx,sy,(p.sizePx/2),0,Math.PI*2); c.fillStyle=(p.color||'#7c7cff')+'33'; c.fill(); c.lineWidth=2; c.strokeStyle=p.color||'#7c7cff'; c.stroke(); } }
+          c.restore();
+          const name=`tile_${x}_${y}.png`;
+          tiles.push({name,x,y,w:cw,h:ch});
+          canvas.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); });
+        }
+      }
+      const manifest={tileWorld,overlap,tiles};
+      const blob=new Blob([JSON.stringify(manifest,null,2)],{type:'application/json'});
+      const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='manifest.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    }
+
+    function drawGridIntoContext(c,x0,y0,w,h,scale){ const targetMinorPx=32; const worldMinor=chooseNiceStep(targetMinorPx/scale); const worldMajor=worldMinor*10; c.strokeStyle='rgba(255,255,255,0.06)'; c.lineWidth=1; c.beginPath(); for(let x=Math.floor(x0/worldMinor)*worldMinor;x<x0+w;x+=worldMinor){ c.moveTo(x-x0,0); c.lineTo(x-x0,h);} for(let y=Math.floor(y0/worldMinor)*worldMinor;y<y0+h;y+=worldMinor){ c.moveTo(0,y-y0); c.lineTo(w,y-y0);} c.stroke(); c.strokeStyle='rgba(255,255,255,0.12)'; c.lineWidth=1.5; c.beginPath(); for(let x=Math.floor(x0/worldMajor)*worldMajor;x<x0+w;x+=worldMajor){ c.moveTo(x-x0,0); c.lineTo(x-x0,h);} for(let y=Math.floor(y0/worldMajor)*worldMajor;y<y0+h;y+=worldMajor){ c.moveTo(0,y-y0); c.lineTo(w,y-y0);} c.stroke(); }
+
+    function sampleColorAt(sx,sy){ const x=Math.floor(sx*dpr), y=Math.floor(sy*dpr); const img=draw.getContext('2d').getImageData(x,y,1,1).data; if(img[3]===0) return null; const toHex=v=>v.toString(16).padStart(2,'0'); return '#'+toHex(img[0])+toHex(img[1])+toHex(img[2]); }
+    function drawCursorPreview(pos){ ctxO.setTransform(dpr,0,0,dpr,0,0); ctxO.clearRect(0,0,overlay.width/dpr,overlay.height/dpr); if(!pos) return; if (tool==='select') return; const px=(tool==='pencil')? (brushMode==='screen'? brushScreenPx : brushWorldPx*s) : (brushMode==='screen'? eraserScreenPx : eraserWorldPx*s); const r=px/2; ctxO.save(); ctxO.beginPath(); ctxO.arc(pos.x,pos.y,r,0,Math.PI*2); if (tool==='pencil'){ if (alphaPct>=0){ ctxO.strokeStyle=color; ctxO.globalAlpha = Math.min(1, alphaPct/100); ctxO.setLineDash([]); } else { ctxO.strokeStyle='#ffffffbb'; ctxO.globalAlpha = Math.min(1, Math.abs(alphaPct/100)); ctxO.setLineDash([6,6]); } ctxO.lineWidth=1.5; } else if (tool==='eraser'){ ctxO.strokeStyle='#ffffffbb'; ctxO.lineWidth=1.5; ctxO.setLineDash([6,6]); ctxO.globalAlpha=1; } else if (tool==='picker'){ ctxO.strokeStyle='#7c7cff'; ctxO.lineWidth=1.5; ctxO.setLineDash([2,3]); ctxO.globalAlpha=1; } ctxO.stroke(); ctxO.restore(); }
+
+    // Undo/Redo
+    function doUndo(){ if(!undoStack.length) return; const a=undoStack.pop(); switch(a.type){
+      case 'stroke-add': { if(strokes.length) strokes.pop(); redoStack.push({type:'stroke-add',stroke:deepCopy(a.stroke)}); redrawAll(); break; }
+      case 'pin-add':   { if(pins[a.index]) pins.splice(a.index,1); if(selectedPin===a.index) selectedPin=-1; redoStack.push({type:'pin-add',index:a.index,pin:deepCopy(a.pin)}); drawPins(); break; }
+      case 'pin-delete':{ pins.splice(a.index,0,deepCopy(a.pin)); redoStack.push({type:'pin-delete',index:a.index,pin:deepCopy(a.pin)}); drawPins(); break; }
+      case 'pin-move':  { const p=pins[a.index]; if(p){ p.x=a.from.x; p.y=a.from.y; } redoStack.push({type:'pin-move',index:a.index,from:deepCopy(a.from),to:deepCopy(a.to)}); drawPins(); break; }
+      case 'sel-move':  { const {dx,dy}=a.delta; for(const i of a.items.strokes){ for(const p of strokes[i].points){ p.x-=dx; p.y-=dy; } } for(const i of a.items.pins){ pins[i].x-=dx; pins[i].y-=dy; } redoStack.push({type:'sel-move',delta:{dx,dy},items:deepCopy(a.items)}); redrawAll(); break; }
+      case 'sel-delete':{ const {strokes:stSnap,pins:pinSnap}=a.snapshot; for(const st of stSnap) strokes.push(st); for(const p of pinSnap) pins.push(p); redoStack.push({type:'sel-delete',snapshot:deepCopy(a.snapshot)}); redrawAll(); break; }
+      case 'stroke-delete-batch':{ const items=[...a.items].sort((x,y)=>x.index-y.index); for(const it of items){ const ins=(it.index<=strokes.length)? it.index : strokes.length; strokes.splice(ins,0,deepCopy(it.stroke)); } redoStack.push({type:'stroke-delete-batch', items: deepCopy(a.items)}); redrawAll(); break; }
+      default: break;
+    }}
+
+    function doRedo(){ if(!redoStack.length) return; const a=redoStack.pop(); switch(a.type){
+      case 'stroke-add': strokes.push(deepCopy(a.stroke)); break;
+      case 'pin-add':    pins.splice(a.index,0,deepCopy(a.pin)); break;
+      case 'pin-delete': if(pins[a.index]) pins.splice(a.index,1); else pins.pop(); break;
+      case 'pin-move':   { const p=pins[a.index]; if (p){ p.x=a.to.x; p.y=a.to.y; } break; }
+      case 'sel-move':   { const {dx,dy}=a.delta; for(const i of a.items.strokes){ for(const p of strokes[i].points){ p.x+=dx; p.y+=dy; } } for(const i of a.items.pins){ pins[i].x+=dx; pins[i].y+=dy; } break; }
+      case 'sel-delete': break;
+      case 'stroke-delete-batch': { const indices=[]; for (const it of a.items){ const idx=findStrokeIndexByIdentity(it.stroke); indices.push(idx); } indices.sort((x,y)=>y-x); for (const idx of indices){ if (idx>=0) strokes.splice(idx,1); } break; }
+      default: break;
+    } redrawAll(); }
+
+    function findStrokeIndexByIdentity(st){ for (let i=strokes.length-1;i>=0;i--){ const t=strokes[i]; if (t && t.mode===st.mode && t.color===st.color && !!t.useWorld===!!st.useWorld && (t.sizeWorld||0)===(st.sizeWorld||0) && (t.sizeScreenPx||0)===(st.sizeScreenPx||0) && t.points.length===st.points.length){ return i; } } return -1; }
+
+    // Init
+    resizeCanvas();
+    document.getElementById('brush').value = pxToExpSlider(brushMode==='screen' ? brushScreenPx : brushWorldPx);
+    document.getElementById('eraser').value = pxToExpSlider(brushMode==='screen' ? eraserScreenPx : eraserWorldPx);
+    updateBrushOut(); updatePanels();
+
+    // Helpers
+    function fileToDataUrl(file){ return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res({name:file.name,type:file.type,dataUrl:fr.result}); fr.onerror=rej; fr.readAsDataURL(file); }); }
+    function blobToDataURL(blob){ return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(blob); }); }
+
+    function syncPinUI(){ if (selectedPin>=0){ const p=pins[selectedPin]; document.getElementById('pinColor').value=p.color||'#7c7cff'; document.getElementById('pinSize').value=p.sizePx||12; document.getElementById('pinSizeOut').textContent=(p.sizePx||12)+' px'; document.getElementById('pinPass').value=p.password||''; } }
+
+  })();
+  </script>
+
+</body>
+</html>
