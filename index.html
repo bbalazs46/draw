@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rajzoló Felület</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            background-color: #f0f0f0;
+        }
+
+        #controls {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            max-width: 300px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .control-group input[type="color"],
+        .control-group input[type="range"] {
+            width: 100%;
+        }
+
+        .control-group input[type="range"] {
+            cursor: pointer;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        button.active {
+            background-color: #2196F3;
+        }
+
+        button.eraser {
+            background-color: #f44336;
+        }
+
+        button.eraser:hover {
+            background-color: #da190b;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        #drawingCanvas {
+            display: block;
+            cursor: crosshair;
+            background-color: white;
+        }
+
+        .size-display {
+            display: inline-block;
+            margin-left: 10px;
+            font-weight: normal;
+        }
+
+        #info {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <div class="control-group">
+            <label>
+                Szín:
+                <input type="color" id="colorPicker" value="#000000">
+            </label>
+        </div>
+
+        <div class="control-group">
+            <label>
+                Toll méret: <span class="size-display" id="sizeDisplay">5</span>px
+                <input type="range" id="sizePicker" min="1" max="50" value="5">
+            </label>
+        </div>
+
+        <div class="control-group">
+            <div class="button-group">
+                <button id="penBtn" class="active">Toll</button>
+                <button id="eraserBtn" class="eraser">Radír</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div class="button-group">
+                <button id="saveBtn">Mentés</button>
+                <button id="loadBtn">Betöltés</button>
+                <button id="clearBtn">Törlés</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="drawingCanvas"></canvas>
+    </div>
+
+    <div id="info">
+        1 ujj: mozgatás | 2 ujj: zoom/forgatás | 3 ujj: transzformáció
+    </div>
+
+    <input type="file" id="fileInput" accept=".json" style="display: none;">
+
+    <script>
+        class DrawingApp {
+            constructor() {
+                // Constants
+                this.DEGENERACY_THRESHOLD = 0.001;
+                
+                this.canvas = document.getElementById('drawingCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                
+                // Canvas setup
+                this.resizeCanvas();
+                window.addEventListener('resize', () => this.resizeCanvas());
+
+                // Drawing state
+                this.isDrawing = false;
+                this.currentColor = '#000000';
+                this.currentSize = 5;
+                this.isEraser = false;
+                this.strokes = [];
+                this.currentStroke = null;
+
+                // Transform state
+                this.transform = {
+                    translateX: 0,
+                    translateY: 0,
+                    scale: 1,
+                    rotation: 0,
+                    matrix: [1, 0, 0, 1, 0, 0] // a, b, c, d, e, f for general transform
+                };
+
+                // Touch tracking
+                this.touches = new Map();
+                this.initialTouchState = null;
+                this.isTransforming = false;
+
+                this.setupEventListeners();
+                this.render();
+            }
+
+            resizeCanvas() {
+                this.canvas.width = window.innerWidth;
+                this.canvas.height = window.innerHeight;
+                this.render();
+            }
+
+            setupEventListeners() {
+                // Mouse events
+                this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
+                this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+                this.canvas.addEventListener('mouseup', () => this.handleMouseUp());
+                this.canvas.addEventListener('mouseleave', () => this.handleMouseUp());
+
+                // Touch events
+                this.canvas.addEventListener('touchstart', (e) => this.handleTouchStart(e), { passive: false });
+                this.canvas.addEventListener('touchmove', (e) => this.handleTouchMove(e), { passive: false });
+                this.canvas.addEventListener('touchend', (e) => this.handleTouchEnd(e), { passive: false });
+                this.canvas.addEventListener('touchcancel', (e) => this.handleTouchEnd(e), { passive: false });
+
+                // Controls
+                document.getElementById('colorPicker').addEventListener('change', (e) => {
+                    this.currentColor = e.target.value;
+                    this.isEraser = false;
+                    this.updateToolButtons();
+                });
+
+                document.getElementById('sizePicker').addEventListener('input', (e) => {
+                    this.currentSize = parseInt(e.target.value);
+                    document.getElementById('sizeDisplay').textContent = this.currentSize;
+                });
+
+                document.getElementById('penBtn').addEventListener('click', () => {
+                    this.isEraser = false;
+                    this.updateToolButtons();
+                });
+
+                document.getElementById('eraserBtn').addEventListener('click', () => {
+                    this.isEraser = true;
+                    this.updateToolButtons();
+                });
+
+                document.getElementById('saveBtn').addEventListener('click', () => this.saveDrawing());
+                document.getElementById('loadBtn').addEventListener('click', () => {
+                    document.getElementById('fileInput').click();
+                });
+                document.getElementById('clearBtn').addEventListener('click', () => this.clearDrawing());
+
+                document.getElementById('fileInput').addEventListener('change', (e) => this.loadDrawing(e));
+            }
+
+            updateToolButtons() {
+                document.getElementById('penBtn').classList.toggle('active', !this.isEraser);
+                document.getElementById('eraserBtn').classList.toggle('active', this.isEraser);
+            }
+
+            // Mouse drawing
+            handleMouseDown(e) {
+                if (this.isTransforming) return;
+                
+                const pos = this.getTransformedPosition(e.clientX, e.clientY);
+                this.isDrawing = true;
+                this.currentStroke = {
+                    points: [pos],
+                    color: this.isEraser ? '#FFFFFF' : this.currentColor,
+                    size: this.currentSize,
+                    isEraser: this.isEraser
+                };
+            }
+
+            handleMouseMove(e) {
+                if (!this.isDrawing || this.isTransforming) return;
+                
+                const pos = this.getTransformedPosition(e.clientX, e.clientY);
+                this.currentStroke.points.push(pos);
+                this.render();
+                this.drawStroke(this.currentStroke);
+            }
+
+            handleMouseUp() {
+                if (this.isDrawing && this.currentStroke) {
+                    this.strokes.push(this.currentStroke);
+                    this.currentStroke = null;
+                    this.isDrawing = false;
+                }
+            }
+
+            // Touch handling
+            handleTouchStart(e) {
+                e.preventDefault();
+                
+                this.updateTouches(e.touches);
+                
+                if (e.touches.length === 1) {
+                    // Check if touching with stylus/pen or regular finger
+                    const touch = e.touches[0];
+                    if (touch.touchType === 'stylus' || e.touches[0].force > 0) {
+                        // Stylus drawing
+                        const pos = this.getTransformedPosition(touch.clientX, touch.clientY);
+                        this.isDrawing = true;
+                        this.currentStroke = {
+                            points: [pos],
+                            color: this.isEraser ? '#FFFFFF' : this.currentColor,
+                            size: this.currentSize,
+                            isEraser: this.isEraser
+                        };
+                    } else {
+                        // Single finger - prepare for pan
+                        this.isTransforming = true;
+                        this.saveTouchState();
+                    }
+                } else if (e.touches.length >= 2) {
+                    // Multi-touch transformations
+                    this.isTransforming = true;
+                    this.isDrawing = false;
+                    if (this.currentStroke) {
+                        this.strokes.push(this.currentStroke);
+                        this.currentStroke = null;
+                    }
+                    this.saveTouchState();
+                }
+            }
+
+            handleTouchMove(e) {
+                e.preventDefault();
+                
+                this.updateTouches(e.touches);
+                
+                if (this.isDrawing && e.touches.length === 1) {
+                    // Drawing with stylus
+                    const touch = e.touches[0];
+                    const pos = this.getTransformedPosition(touch.clientX, touch.clientY);
+                    this.currentStroke.points.push(pos);
+                    this.render();
+                    this.drawStroke(this.currentStroke);
+                } else if (this.isTransforming) {
+                    if (e.touches.length === 1) {
+                        // Pan
+                        this.handlePan(e.touches[0]);
+                    } else if (e.touches.length === 2) {
+                        // Zoom and rotate
+                        this.handleTwoFingerTransform(e.touches);
+                    } else if (e.touches.length === 3) {
+                        // General linear transformation
+                        this.handleThreeFingerTransform(e.touches);
+                    }
+                    this.render();
+                }
+            }
+
+            handleTouchEnd(e) {
+                e.preventDefault();
+                
+                this.updateTouches(e.touches);
+                
+                if (e.touches.length === 0) {
+                    if (this.isDrawing && this.currentStroke) {
+                        this.strokes.push(this.currentStroke);
+                        this.currentStroke = null;
+                    }
+                    this.isDrawing = false;
+                    this.isTransforming = false;
+                    this.initialTouchState = null;
+                } else if (e.touches.length > 0) {
+                    this.saveTouchState();
+                }
+            }
+
+            updateTouches(touchList) {
+                this.touches.clear();
+                for (let i = 0; i < touchList.length; i++) {
+                    const touch = touchList[i];
+                    this.touches.set(touch.identifier, {
+                        x: touch.clientX,
+                        y: touch.clientY
+                    });
+                }
+            }
+
+            saveTouchState() {
+                const touchArray = Array.from(this.touches.values());
+                this.initialTouchState = {
+                    touches: touchArray.map(t => ({ ...t })),
+                    transform: { ...this.transform },
+                    matrix: [...this.transform.matrix]
+                };
+            }
+
+            handlePan(touch) {
+                if (!this.initialTouchState) return;
+                
+                const dx = touch.clientX - this.initialTouchState.touches[0].x;
+                const dy = touch.clientY - this.initialTouchState.touches[0].y;
+                
+                this.transform.translateX = this.initialTouchState.transform.translateX + dx;
+                this.transform.translateY = this.initialTouchState.transform.translateY + dy;
+            }
+
+            handleTwoFingerTransform(touches) {
+                if (!this.initialTouchState || this.initialTouchState.touches.length < 2) return;
+                
+                const t0 = touches[0], t1 = touches[1];
+                const it0 = this.initialTouchState.touches[0], it1 = this.initialTouchState.touches[1];
+                
+                // Current center and distance
+                const cx = (t0.clientX + t1.clientX) / 2;
+                const cy = (t0.clientY + t1.clientY) / 2;
+                const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+                const angle = Math.atan2(t1.clientY - t0.clientY, t1.clientX - t0.clientX);
+                
+                // Initial center and distance
+                const icx = (it0.x + it1.x) / 2;
+                const icy = (it0.y + it1.y) / 2;
+                const idist = Math.hypot(it1.x - it0.x, it1.y - it0.y);
+                const iangle = Math.atan2(it1.y - it0.y, it1.x - it0.x);
+                
+                // Calculate scale and rotation
+                const scale = dist / idist;
+                const rotation = angle - iangle;
+                
+                this.transform.scale = this.initialTouchState.transform.scale * scale;
+                this.transform.rotation = this.initialTouchState.transform.rotation + rotation;
+                this.transform.translateX = this.initialTouchState.transform.translateX + (cx - icx);
+                this.transform.translateY = this.initialTouchState.transform.translateY + (cy - icy);
+            }
+
+            handleThreeFingerTransform(touches) {
+                if (!this.initialTouchState || this.initialTouchState.touches.length < 3) return;
+                
+                // Get current and initial positions
+                const curr = [
+                    { x: touches[0].clientX, y: touches[0].clientY },
+                    { x: touches[1].clientX, y: touches[1].clientY },
+                    { x: touches[2].clientX, y: touches[2].clientY }
+                ];
+                const init = this.initialTouchState.touches.slice(0, 3);
+                
+                // Calculate affine transformation matrix using least squares
+                // We want to find matrix M such that curr = M * init
+                // Matrix form: [x'] = [a c e] [x]
+                //              [y']   [b d f] [y]
+                //                            [1]
+                
+                try {
+                    const matrix = this.calculateAffineTransform(init, curr);
+                    if (matrix) {
+                        // Combine with initial transform
+                        const m = this.initialTouchState.matrix;
+                        this.transform.matrix = [
+                            matrix[0] * m[0] + matrix[2] * m[1],
+                            matrix[1] * m[0] + matrix[3] * m[1],
+                            matrix[0] * m[2] + matrix[2] * m[3],
+                            matrix[1] * m[2] + matrix[3] * m[3],
+                            matrix[0] * m[4] + matrix[2] * m[5] + matrix[4],
+                            matrix[1] * m[4] + matrix[3] * m[5] + matrix[5]
+                        ];
+                    }
+                } catch (e) {
+                    console.error('Transform calculation error:', e);
+                }
+            }
+
+            calculateAffineTransform(from, to) {
+                // Solve for affine transformation using three point correspondences
+                // [x0' y0' x1' y1' x2' y2']^T = A * [a b c d e f]^T
+                // where A is built from source points
+                
+                const x0 = from[0].x, y0 = from[0].y;
+                const x1 = from[1].x, y1 = from[1].y;
+                const x2 = from[2].x, y2 = from[2].y;
+                
+                // Build system for x' = ax + cy + e
+                const det = x0 * (y1 - y2) - x1 * (y0 - y2) + x2 * (y0 - y1);
+                if (Math.abs(det) < this.DEGENERACY_THRESHOLD) return null; // Degenerate case
+                
+                const a = ((to[0].x * (y1 - y2) - to[1].x * (y0 - y2) + to[2].x * (y0 - y1)) / det);
+                const c = ((x0 * (to[1].x - to[2].x) - x1 * (to[0].x - to[2].x) + x2 * (to[0].x - to[1].x)) / det);
+                const e = ((x0 * (y1 * to[2].x - y2 * to[1].x) - x1 * (y0 * to[2].x - y2 * to[0].x) + x2 * (y0 * to[1].x - y1 * to[0].x)) / det);
+                
+                // Build system for y' = bx + dy + f
+                const b = ((to[0].y * (y1 - y2) - to[1].y * (y0 - y2) + to[2].y * (y0 - y1)) / det);
+                const d = ((x0 * (to[1].y - to[2].y) - x1 * (to[0].y - to[2].y) + x2 * (to[0].y - to[1].y)) / det);
+                const f = ((x0 * (y1 * to[2].y - y2 * to[1].y) - x1 * (y0 * to[2].y - y2 * to[0].y) + x2 * (y0 * to[1].y - y1 * to[0].y)) / det);
+                
+                return [a, b, c, d, e, f];
+            }
+
+            getTransformedPosition(screenX, screenY) {
+                // Apply inverse transformation to get canvas coordinates
+                if (this.transform.matrix.some(v => v !== 0 && !isNaN(v) && v !== 1) && 
+                    (this.touches.size >= 3 || (this.initialTouchState && this.initialTouchState.touches && this.initialTouchState.touches.length >= 3))) {
+                    // Use general matrix inverse for 3-finger transform
+                    const m = this.transform.matrix;
+                    const det = m[0] * m[3] - m[1] * m[2];
+                    if (Math.abs(det) > this.DEGENERACY_THRESHOLD) {
+                        const invDet = 1 / det;
+                        const x = screenX - m[4];
+                        const y = screenY - m[5];
+                        return {
+                            x: invDet * (m[3] * x - m[2] * y),
+                            y: invDet * (-m[1] * x + m[0] * y)
+                        };
+                    }
+                }
+                
+                // Standard inverse for scale/rotate/translate
+                const x = screenX - this.transform.translateX;
+                const y = screenY - this.transform.translateY;
+                const cos = Math.cos(-this.transform.rotation);
+                const sin = Math.sin(-this.transform.rotation);
+                const scale = 1 / this.transform.scale;
+                
+                return {
+                    x: scale * (cos * x - sin * y),
+                    y: scale * (sin * x + cos * y)
+                };
+            }
+
+            applyTransform() {
+                if (!this.transform) return;
+                
+                this.ctx.translate(this.transform.translateX, this.transform.translateY);
+                
+                if (this.touches.size >= 3 || (this.initialTouchState && this.initialTouchState.touches && this.initialTouchState.touches.length >= 3)) {
+                    // Use general transformation matrix
+                    const m = this.transform.matrix;
+                    this.ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+                } else {
+                    // Use scale and rotation
+                    this.ctx.scale(this.transform.scale, this.transform.scale);
+                    this.ctx.rotate(this.transform.rotation);
+                }
+            }
+
+            render() {
+                if (!this.ctx || !this.strokes) return;
+                
+                // Clear canvas
+                this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+                this.ctx.fillStyle = '#f0f0f0';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Apply transformation
+                this.ctx.save();
+                this.applyTransform();
+                
+                // Draw white background for drawing area
+                this.ctx.fillStyle = 'white';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Draw all strokes
+                this.strokes.forEach(stroke => this.drawStroke(stroke));
+                
+                this.ctx.restore();
+            }
+
+            drawStroke(stroke) {
+                if (stroke.points.length < 2) return;
+                
+                this.ctx.save();
+                this.applyTransform();
+                
+                this.ctx.strokeStyle = stroke.color;
+                this.ctx.lineWidth = stroke.size;
+                this.ctx.lineCap = 'round';
+                this.ctx.lineJoin = 'round';
+                
+                if (stroke.isEraser) {
+                    this.ctx.globalCompositeOperation = 'destination-out';
+                }
+                
+                this.ctx.beginPath();
+                this.ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+                
+                for (let i = 1; i < stroke.points.length; i++) {
+                    this.ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+                }
+                
+                this.ctx.stroke();
+                
+                if (stroke.isEraser) {
+                    this.ctx.globalCompositeOperation = 'source-over';
+                }
+                
+                this.ctx.restore();
+            }
+
+            saveDrawing() {
+                const data = {
+                    version: '1.0',
+                    strokes: this.strokes,
+                    transform: this.transform,
+                    canvasSize: {
+                        width: this.canvas.width,
+                        height: this.canvas.height
+                    },
+                    timestamp: new Date().toISOString()
+                };
+                
+                const json = JSON.stringify(data, null, 2);
+                const blob = new Blob([json], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                
+                const now = new Date();
+                const dateStr = now.toISOString().replace(/:/g, '-').split('.')[0];
+                
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `drawing_${dateStr}.json`;
+                a.click();
+                
+                URL.revokeObjectURL(url);
+            }
+
+            loadDrawing(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+                
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const data = JSON.parse(e.target.result);
+                        
+                        if (!data.strokes || !Array.isArray(data.strokes)) {
+                            throw new Error('Érvénytelen fájl formátum');
+                        }
+                        
+                        this.strokes = data.strokes;
+                        
+                        if (data.transform) {
+                            this.transform = data.transform;
+                            // Ensure matrix exists
+                            if (!this.transform.matrix) {
+                                this.transform.matrix = [1, 0, 0, 1, 0, 0];
+                            }
+                        }
+                        
+                        this.render();
+                        alert(`Rajz betöltve! (${this.strokes.length} vonás)`);
+                    } catch (err) {
+                        let errorMsg = 'Hiba a fájl betöltése során.';
+                        if (err.message.includes('JSON')) {
+                            errorMsg = 'Érvénytelen JSON fájl formátum.';
+                        } else if (err.message.includes('formátum')) {
+                            errorMsg = err.message;
+                        }
+                        alert(errorMsg);
+                        console.error('Load error:', err);
+                    }
+                };
+                reader.readAsText(file);
+                
+                // Reset file input
+                event.target.value = '';
+            }
+
+            clearDrawing() {
+                if (confirm('Biztosan törölni szeretnéd a rajzot?')) {
+                    this.strokes = [];
+                    this.transform = {
+                        translateX: 0,
+                        translateY: 0,
+                        scale: 1,
+                        rotation: 0,
+                        matrix: [1, 0, 0, 1, 0, 0]
+                    };
+                    this.render();
+                }
+            }
+        }
+
+        // Initialize the app
+        const app = new DrawingApp();
+    </script>
+</body>
+</html>
