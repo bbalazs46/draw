@@ -55,6 +55,7 @@
         </div>
         <div class="group">
           <label class="row" data-tip="Szín"><span class="readout">Szín</span><input id="color" type="color" value="#ffb703"/></label>
+          <label class="row" data-tip="Háttér színe"><span class="readout">Háttér</span><input id="bgColor" type="color" value="#0f1115"/></label>
         </div>
         <span class="break"></span>
         <div class="group">
@@ -160,6 +161,7 @@
     let eraserWorldPx = 6;    // radír világ px
     let touchDraw = false;    // alapból ki
     let alphaPct = 100;       // −100..100 (negatív: halvány radír)
+    let bgColor = '#0f1115';  // háttér szín
 
     // Rács fix 50 világ px
     let gridLock50 = false;
@@ -229,6 +231,7 @@
 
     // UI bind
     $('#color').addEventListener('input', e=>{ color=e.target.value; drawCursorPreview(lastMovePos); });
+    $('#bgColor').addEventListener('change', e=>{ bgColor=e.target.value; document.documentElement.style.setProperty('--bg', bgColor); redrawAll(); });
     $('#brush').addEventListener('input', e=>{ const val=expSliderToPx(+e.target.value); if (brushMode==='screen') brushScreenPx=val; else brushWorldPx=val; updateBrushOut(); drawCursorPreview(lastMovePos); });
     $('#eraser').addEventListener('input', e=>{ const val=expSliderToPx(+e.target.value); if (brushMode==='screen') eraserScreenPx=val; else eraserWorldPx=val; updateBrushOut(); drawCursorPreview(lastMovePos); });
     $('#touchDraw').addEventListener('change', e=>{ touchDraw=e.target.checked; });
@@ -446,7 +449,7 @@
 
     function drawGrid(){
       ctxG.setTransform(dpr,0,0,dpr,0,0);
-      ctxG.clearRect(0,0,grid.width/dpr,grid.height/dpr);
+      ctxG.fillStyle=bgColor; ctxG.fillRect(0,0,grid.width/dpr,grid.height/dpr);
       const w=grid.width/dpr,h=grid.height/dpr; let worldMinor,worldMajor;
       if (gridLock50){ worldMinor=50; worldMajor=500; }
       else { const targetMinorPx=32; worldMinor=chooseNiceStep(targetMinorPx/s); worldMajor=worldMinor*10; }
@@ -495,12 +498,14 @@
     async function openPin(idx){ const p=pins[idx]; if(!p) return; if(p.password){ const given=prompt('Add meg a jelszót a megnyitáshoz:'); if(given!==p.password){ alert('Hibás jelszó.'); return; } } if(!p.dataUrl){ alert('Ez a pin még nem tartalmaz fájlt.'); return; } if (p.type && p.type.startsWith('audio/')){ lbName.textContent=p.name||'Felvétel'; lbContent.innerHTML=''; const audio=document.createElement('audio'); audio.controls=true; audio.autoplay=true; audio.src=p.dataUrl; audio.style.width='min(80vw,720px)'; lbContent.appendChild(audio); lb.classList.add('open'); lbJustOpenedAt=Date.now(); return; } const w=window.open(p.dataUrl,'_blank'); if(!w) alert('A böngésző blokkolta a megnyitást.'); }
 
     // Export / Save
-    function saveProject(){ const data={version:14, view:{s,tx,ty}, strokes, pins, settings:{color,brushMode,brushScreenPx,brushWorldPx,eraserScreenPx,eraserWorldPx,alphaPct,gridLock50,pinColor,pinSizePx,touchDraw}}; const blob=new Blob([JSON.stringify(data)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='projekt.json'; a.click(); URL.revokeObjectURL(a.href); }
-    function loadProject(e){ const file=e.target.files[0]; if(!file) return; const fr=new FileReader(); fr.onload=()=>{ try{ const data=JSON.parse(fr.result); if(data.view){ s=data.view.s||1; tx=data.view.tx||0; ty=data.view.ty||0; } if(Array.isArray(data.strokes)){ strokes.length=0; for(const st of data.strokes){ if(st.useWorld===undefined){ st.useWorld=!!st.sizeWorld; } if (st.alpha==null) st.alpha=1; strokes.push(st); } } if(Array.isArray(data.pins)){ pins.length=0; for(const p of data.pins) pins.push(p); } if(data.settings){ const cfg=data.settings; if(cfg.color!=null){ color=cfg.color; $('#color').value=color; } if(cfg.brushMode!=null){ brushMode=cfg.brushMode; brushUnit.value=brushMode; } if(cfg.brushScreenPx!=null) brushScreenPx=cfg.brushScreenPx; if(cfg.brushWorldPx!=null) brushWorldPx=cfg.brushWorldPx; if(cfg.eraserScreenPx!=null) eraserScreenPx=cfg.eraserScreenPx; if(cfg.eraserWorldPx!=null) eraserWorldPx=cfg.eraserWorldPx; if(cfg.alphaPct!=null){ alphaPct=cfg.alphaPct; $('#alpha').value=alphaPct; } if(cfg.gridLock50!=null){ gridLock50=cfg.gridLock50; $('#gridLock').checked=gridLock50; } if(cfg.pinColor!=null){ pinColor=cfg.pinColor; $('#pinColor').value=pinColor; } if(cfg.pinSizePx!=null){ pinSizePx=cfg.pinSizePx; $('#pinSize').value=pinSizePx; document.getElementById('pinSizeOut').textContent=pinSizePx+' px'; } if(cfg.touchDraw!=null){ touchDraw=!!cfg.touchDraw; $('#touchDraw').checked=touchDraw; } $('#brush').value=pxToExpSlider(brushMode==='screen'?brushScreenPx:brushWorldPx); $('#eraser').value=pxToExpSlider(brushMode==='screen'?eraserScreenPx:eraserWorldPx); updateBrushOut(); } redoStack.length=0; undoStack.length=0; redrawAll(); }catch(err){ alert('Hibás fájl.'); } }; fr.readAsText(file); e.target.value=''; }
+    function saveProject(){ const data={version:14, view:{s,tx,ty}, strokes, pins, settings:{color,brushMode,brushScreenPx,brushWorldPx,eraserScreenPx,eraserWorldPx,alphaPct,gridLock50,pinColor,pinSizePx,touchDraw,bgColor}}; const blob=new Blob([JSON.stringify(data)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='projekt.json'; a.click(); URL.revokeObjectURL(a.href); }
+    function loadProject(e){ const file=e.target.files[0]; if(!file) return; const fr=new FileReader(); fr.onload=()=>{ try{ const data=JSON.parse(fr.result); if(data.view){ s=data.view.s||1; tx=data.view.tx||0; ty=data.view.ty||0; } if(Array.isArray(data.strokes)){ strokes.length=0; for(const st of data.strokes){ if(st.useWorld===undefined){ st.useWorld=!!st.sizeWorld; } if (st.alpha==null) st.alpha=1; strokes.push(st); } } if(Array.isArray(data.pins)){ pins.length=0; for(const p of data.pins) pins.push(p); } if(data.settings){ const cfg=data.settings; if(cfg.color!=null){ color=cfg.color; $('#color').value=color; } if(cfg.brushMode!=null){ brushMode=cfg.brushMode; brushUnit.value=brushMode; } if(cfg.brushScreenPx!=null) brushScreenPx=cfg.brushScreenPx; if(cfg.brushWorldPx!=null) brushWorldPx=cfg.brushWorldPx; if(cfg.eraserScreenPx!=null) eraserScreenPx=cfg.eraserScreenPx; if(cfg.eraserWorldPx!=null) eraserWorldPx=cfg.eraserWorldPx; if(cfg.alphaPct!=null){ alphaPct=cfg.alphaPct; $('#alpha').value=alphaPct; } if(cfg.gridLock50!=null){ gridLock50=cfg.gridLock50; $('#gridLock').checked=gridLock50; } if(cfg.pinColor!=null){ pinColor=cfg.pinColor; $('#pinColor').value=pinColor; } if(cfg.pinSizePx!=null){ pinSizePx=cfg.pinSizePx; $('#pinSize').value=pinSizePx; document.getElementById('pinSizeOut').textContent=pinSizePx+' px'; } if(cfg.touchDraw!=null){ touchDraw=!!cfg.touchDraw; $('#touchDraw').checked=touchDraw; } if(cfg.bgColor!=null){ bgColor=cfg.bgColor; $('#bgColor').value=bgColor; document.documentElement.style.setProperty('--bg', bgColor); } $('#brush').value=pxToExpSlider(brushMode==='screen'?brushScreenPx:brushWorldPx); $('#eraser').value=pxToExpSlider(brushMode==='screen'?eraserScreenPx:eraserWorldPx); updateBrushOut(); } redoStack.length=0; undoStack.length=0; redrawAll(); }catch(err){ alert('Hibás fájl.'); } }; fr.readAsText(file); e.target.value=''; }
 
     function exportPNG(){
       const w=draw.width,h=draw.height;
       const tmp=document.createElement('canvas'); tmp.width=w; tmp.height=h; const c=tmp.getContext('2d');
+      // Background
+      c.fillStyle=bgColor; c.fillRect(0,0,w,h);
       // Grid
       c.drawImage(grid,0,0);
       // Strokes
@@ -542,7 +547,7 @@
           canvas.width=Math.round(cw*scale);
           canvas.height=Math.round(ch*scale);
           const c=canvas.getContext('2d');
-          c.fillStyle='#0f1115'; c.fillRect(0,0,canvas.width,canvas.height);
+          c.fillStyle=bgColor; c.fillRect(0,0,canvas.width,canvas.height);
           c.save(); c.scale(scale,scale); drawGridIntoContext(c,x,y,cw,ch,1); c.restore();
           c.save(); c.scale(scale,scale); c.translate(-x,-y); c.lineJoin='round'; c.lineCap='round';
           for(const st of strokes){
