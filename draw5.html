@@ -588,7 +588,13 @@
 
     // Export / Save
     function collectProjectData(){ return {version:15, view:{s,tx,ty}, strokes, pins, palette, settings:{color,activePaletteIndex,brushMode,brushScreenPx,brushWorldPx,eraserScreenPx,eraserWorldPx,alphaPct,gridLock50,pinColor,pinSizePx,touchDraw,bgColor}}; }
-    function localProjectFileName(){ const base=(onlineNameInput.value||currentProjectName||'projekt').trim().replace(/[\\/:*?"<>|]+/g,'-').slice(0,80) || 'projekt'; return base+'.json'; }
+    function sanitizeProjectName(value){
+      let name=(value||'').trim();
+      if(!name || name.includes('..')) return '';
+      name=name.replace(/[^\p{L}\p{N}._ -]+/gu,'-').replace(/\s+/gu,' ').replace(/^[ .-]+|[ .-]+$/gu,'');
+      return Array.from(name).slice(0,80).join('');
+    }
+    function localProjectFileName(){ const base=sanitizeProjectName(onlineNameInput.value||currentProjectName||'projekt') || 'projekt'; return base+'.json'; }
     function applyProjectData(data){
       if(data.view){ s=data.view.s||1; tx=data.view.tx||0; ty=data.view.ty||0; }
       if(Array.isArray(data.strokes)){ strokes.length=0; for(const st of data.strokes){ if(st.useWorld===undefined){ st.useWorld=!!st.sizeWorld; } if (st.alpha==null) st.alpha=1; strokes.push(st); } }
@@ -673,7 +679,7 @@
       }
     }
     async function saveProjectOnline(){
-      const requestedName=(onlineNameInput.value||currentProjectName).trim();
+      const requestedName=sanitizeProjectName(onlineNameInput.value||currentProjectName);
       if(!requestedName){ alert('Adj meg egy online fájlnevet.'); onlineNameInput.focus(); return; }
       try{
         setOnlineUiState(false,'Online mentés: mentés folyamatban…');

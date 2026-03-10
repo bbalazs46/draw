@@ -17,7 +17,7 @@ respond(handleRequest($dataDir, $maxRequestBytes));
 function handleRequest(string $dataDir, int $maxRequestBytes): array
 {
     $action = $_GET['action'] ?? 'list';
-    if (!is_dir($dataDir) && !mkdir($dataDir, 0775, true) && !is_dir($dataDir)) {
+    if (!is_dir($dataDir) && !mkdir($dataDir, 0700, true) && !is_dir($dataDir)) {
         return errorResponse('Nem sikerült létrehozni a mentési mappát.', 500);
     }
 
@@ -126,16 +126,26 @@ function sanitizeProjectName(mixed $value): ?string
     if ($name === '') {
         return null;
     }
+    if (str_contains($name, '..')) {
+        return null;
+    }
 
     $name = preg_replace('/[^\pL\pN._ -]+/u', '-', $name);
-    $name = preg_replace('/\s+/u', ' ', $name ?? '');
+    if ($name === null) {
+        return null;
+    }
+    $name = preg_replace('/\s+/u', ' ', $name);
+    if ($name === null) {
+        return null;
+    }
     $name = trim((string) $name, " .\t\n\r\0\x0B-");
 
     if ($name === '') {
         return null;
     }
 
-    $name = function_exists('mb_substr') ? mb_substr($name, 0, 80) : substr($name, 0, 80);
+    preg_match_all('/./us', $name, $chars);
+    $name = implode('', array_slice($chars[0] ?? [], 0, 80));
     return $name !== '' ? $name : null;
 }
 
