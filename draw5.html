@@ -22,8 +22,9 @@
     .row{display:inline-flex;align-items:center;gap:8px}
     .slider{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;background:var(--panel);border-radius:8px;border:1px solid rgba(255,255,255,.1)}
     input[type=range]{width:140px} input[type=color]{width:36px;height:28px;border:none;background:transparent}
-    input[type=password]{width:120px;padding:6px 8px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#1b2030;color:#e6e9ef}
+    input[type=password],input[type=text]{width:120px;padding:6px 8px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#1b2030;color:#e6e9ef}
     select{height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#1b2030;color:#e6e9ef;padding:0 8px}
+    #onlineList{max-width:180px}
     .wrap{position:absolute;inset:0;top:56px} .stage{position:absolute;inset:0}
     canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
     #overlay{pointer-events:auto;cursor:crosshair}
@@ -106,6 +107,13 @@
           <button id="save" class="success">💾 Mentés</button>
           <input id="loadFile" type="file" accept="application/json" style="display:none" />
           <button id="load">📂 Betöltés</button>
+          <div class="divider"></div>
+          <input id="onlineName" type="text" placeholder="Online fájlnév" />
+          <button id="saveOnline" class="btn">☁️ Online mentés</button>
+          <select id="onlineList" aria-label="Online rajzok" disabled><option value="">Online rajzok</option></select>
+          <button id="loadOnline" class="btn" disabled>☁️ Megnyitás</button>
+          <button id="refreshOnline" class="btn" data-tip="Online lista frissítése">↻</button>
+          <span id="onlineStatus" class="readout">Online mentés: ellenőrzés…</span>
           <div class="divider"></div>
           <button id="exportPng">🖼️ PNG</button>
           <button id="exportTiles">🧩 Csempék</button>
@@ -215,6 +223,19 @@
     const selClearBtn = $('#selClearBtn');
     const brushUnit = $('#brushUnit');
     const brushOut = $('#brushOut'); const eraserOut = $('#eraserOut'); const alphaOut = document.getElementById('alphaOut');
+    const onlineNameInput = $('#onlineName');
+    const onlineList = $('#onlineList');
+    const onlineStatus = $('#onlineStatus');
+    const DEFAULT_ONLINE_API_URL = 'https://benderbalazs.hu/draw2/draw5_store.php';
+    const onlineApiUrl = (() => {
+      const qsUrl = new URLSearchParams(window.location.search).get('store');
+      if (qsUrl) return qsUrl;
+      if (typeof window.DRAW5_STORE_URL === 'string' && window.DRAW5_STORE_URL.trim()) return window.DRAW5_STORE_URL.trim();
+      return DEFAULT_ONLINE_API_URL;
+    })();
+    let onlineAvailable = false;
+    let onlineFiles = [];
+    let currentProjectName = '';
 
     function updatePanels(){ const showPinStuff = tool==='pin' && !drawing; pinPanel.style.display = showPinStuff ? '' : 'none'; recPanel.style.display = showPinStuff ? '' : 'none'; updateSelButton(); }
     function updateSelButton(){ selClearBtn.style.display = (tool==='select' && sel) ? '' : 'none'; }
@@ -321,6 +342,17 @@
     $('#save').addEventListener('click', saveProject);
     $('#load').addEventListener('click', ()=> $('#loadFile').click());
     $('#loadFile').addEventListener('change', loadProject);
+    $('#saveOnline').addEventListener('click', saveProjectOnline);
+    $('#loadOnline').addEventListener('click', loadSelectedOnlineProject);
+    $('#refreshOnline').addEventListener('click', ()=> refreshOnlineFiles({force:true}));
+    onlineList.addEventListener('change', ()=>{
+      const name = onlineList.value;
+      $('#loadOnline').disabled = !onlineAvailable || !name;
+      if (name) {
+        currentProjectName = name;
+        onlineNameInput.value = name;
+      }
+    });
     $('#exportPng').addEventListener('click', exportPNG);
     $('#exportTiles').addEventListener('click', exportTiles);
 
@@ -561,8 +593,124 @@
     async function openPin(idx){ const p=pins[idx]; if(!p) return; if(p.password){ const given=prompt('Add meg a jelszót a megnyitáshoz:'); if(given!==p.password){ alert('Hibás jelszó.'); return; } } if(!p.dataUrl){ alert('Ez a pin még nem tartalmaz fájlt.'); return; } if (p.type && p.type.startsWith('audio/')){ lbName.textContent=p.name||'Felvétel'; lbContent.innerHTML=''; const audio=document.createElement('audio'); audio.controls=true; audio.autoplay=true; audio.src=p.dataUrl; audio.style.width='min(80vw,720px)'; lbContent.appendChild(audio); lb.classList.add('open'); lbJustOpenedAt=Date.now(); return; } const w=window.open(p.dataUrl,'_blank'); if(!w) alert('A böngésző blokkolta a megnyitást.'); }
 
     // Export / Save
-    function saveProject(){ const data={version:15, view:{s,tx,ty}, strokes, pins, palette, settings:{color,activePaletteIndex,brushMode,brushScreenPx,brushWorldPx,eraserScreenPx,eraserWorldPx,alphaPct,gridLock50,pinColor,pinSizePx,touchDraw,bgColor}}; const blob=new Blob([JSON.stringify(data)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='projekt.json'; a.click(); URL.revokeObjectURL(a.href); }
-    function loadProject(e){ const file=e.target.files[0]; if(!file) return; const fr=new FileReader(); fr.onload=()=>{ try{ const data=JSON.parse(fr.result); if(data.view){ s=data.view.s||1; tx=data.view.tx||0; ty=data.view.ty||0; } if(Array.isArray(data.strokes)){ strokes.length=0; for(const st of data.strokes){ if(st.useWorld===undefined){ st.useWorld=!!st.sizeWorld; } if (st.alpha==null) st.alpha=1; strokes.push(st); } } if(Array.isArray(data.pins)){ pins.length=0; for(const p of data.pins) pins.push(p); } const hasPalette=Array.isArray(data.palette); if(hasPalette){ palette.length=0; for(const c of data.palette) palette.push(c); } if(data.settings){ const cfg=data.settings; if(cfg.color!=null){ color=cfg.color; $('#color').value=color; } if(hasPalette && cfg.activePaletteIndex!=null){ activePaletteIndex=Math.max(0,Math.min(cfg.activePaletteIndex,palette.length-1)); } if(cfg.brushMode!=null){ brushMode=cfg.brushMode; brushUnit.value=brushMode; } if(cfg.brushScreenPx!=null) brushScreenPx=cfg.brushScreenPx; if(cfg.brushWorldPx!=null) brushWorldPx=cfg.brushWorldPx; if(cfg.eraserScreenPx!=null) eraserScreenPx=cfg.eraserScreenPx; if(cfg.eraserWorldPx!=null) eraserWorldPx=cfg.eraserWorldPx; if(cfg.alphaPct!=null){ alphaPct=cfg.alphaPct; $('#alpha').value=alphaPct; } if(cfg.gridLock50!=null){ gridLock50=cfg.gridLock50; $('#gridLock').checked=gridLock50; } if(cfg.pinColor!=null){ pinColor=cfg.pinColor; $('#pinColor').value=pinColor; } if(cfg.pinSizePx!=null){ pinSizePx=cfg.pinSizePx; $('#pinSize').value=pinSizePx; document.getElementById('pinSizeOut').textContent=pinSizePx+' px'; } if(cfg.touchDraw!=null){ touchDraw=!!cfg.touchDraw; $('#touchDraw').checked=touchDraw; } if(cfg.bgColor!=null){ bgColor=cfg.bgColor; $('#bgColor').value=bgColor; document.documentElement.style.setProperty('--bg', bgColor); } $('#brush').value=pxToExpSlider(brushMode==='screen'?brushScreenPx:brushWorldPx); $('#eraser').value=pxToExpSlider(brushMode==='screen'?eraserScreenPx:eraserWorldPx); updateBrushOut(); } if(hasPalette){ color=palette[activePaletteIndex]; $('#color').value=color; } renderPalette(); redoStack.length=0; undoStack.length=0; redrawAll(); }catch(err){ alert('Hibás fájl.'); } }; fr.readAsText(file); e.target.value=''; }
+    function collectProjectData(){ return {version:15, view:{s,tx,ty}, strokes, pins, palette, settings:{color,activePaletteIndex,brushMode,brushScreenPx,brushWorldPx,eraserScreenPx,eraserWorldPx,alphaPct,gridLock50,pinColor,pinSizePx,touchDraw,bgColor}}; }
+    function sanitizeProjectName(value){
+      let name=(value||'').trim();
+      if(!name || name.includes('..')) return '';
+      name=name.replace(/[^\p{L}\p{N}._ -]+/gu,'-').replace(/\s+/gu,' ').replace(/^[ .-]+|[ .-]+$/gu,'');
+      return Array.from(name).slice(0,80).join('');
+    }
+    function localProjectFileName(){ const base=sanitizeProjectName(onlineNameInput.value||currentProjectName||'projekt') || 'projekt'; return base+'.json'; }
+    function applyProjectData(data){
+      if(data.view){ s=data.view.s||1; tx=data.view.tx||0; ty=data.view.ty||0; }
+      if(Array.isArray(data.strokes)){ strokes.length=0; for(const st of data.strokes){ if(st.useWorld===undefined){ st.useWorld=!!st.sizeWorld; } if (st.alpha==null) st.alpha=1; strokes.push(st); } }
+      if(Array.isArray(data.pins)){ pins.length=0; for(const p of data.pins) pins.push(p); }
+      const hasPalette=Array.isArray(data.palette);
+      if(hasPalette){ palette.length=0; for(const c of data.palette) palette.push(c); }
+      if(data.settings){
+        const cfg=data.settings;
+        if(cfg.color!=null){ color=cfg.color; $('#color').value=color; }
+        if(hasPalette && cfg.activePaletteIndex!=null){ activePaletteIndex=Math.max(0,Math.min(cfg.activePaletteIndex,palette.length-1)); }
+        if(cfg.brushMode!=null){ brushMode=cfg.brushMode; brushUnit.value=brushMode; }
+        if(cfg.brushScreenPx!=null) brushScreenPx=cfg.brushScreenPx;
+        if(cfg.brushWorldPx!=null) brushWorldPx=cfg.brushWorldPx;
+        if(cfg.eraserScreenPx!=null) eraserScreenPx=cfg.eraserScreenPx;
+        if(cfg.eraserWorldPx!=null) eraserWorldPx=cfg.eraserWorldPx;
+        if(cfg.alphaPct!=null){ alphaPct=cfg.alphaPct; $('#alpha').value=alphaPct; }
+        if(cfg.gridLock50!=null){ gridLock50=cfg.gridLock50; $('#gridLock').checked=gridLock50; }
+        if(cfg.pinColor!=null){ pinColor=cfg.pinColor; $('#pinColor').value=pinColor; }
+        if(cfg.pinSizePx!=null){ pinSizePx=cfg.pinSizePx; $('#pinSize').value=pinSizePx; document.getElementById('pinSizeOut').textContent=pinSizePx+' px'; }
+        if(cfg.touchDraw!=null){ touchDraw=!!cfg.touchDraw; $('#touchDraw').checked=touchDraw; }
+        if(cfg.bgColor!=null){ bgColor=cfg.bgColor; $('#bgColor').value=bgColor; document.documentElement.style.setProperty('--bg', bgColor); }
+      }
+      $('#brush').value=pxToExpSlider(brushMode==='screen'?brushScreenPx:brushWorldPx);
+      $('#eraser').value=pxToExpSlider(brushMode==='screen'?eraserScreenPx:eraserWorldPx);
+      updateBrushOut();
+      if(hasPalette){ color=palette[activePaletteIndex]; $('#color').value=color; }
+      renderPalette();
+      redoStack.length=0; undoStack.length=0; selectedPin=-1; clearSelection(); redrawAll(); updatePanels();
+    }
+    function saveProject(){ const data=collectProjectData(); const blob=new Blob([JSON.stringify(data)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=localProjectFileName(); a.click(); URL.revokeObjectURL(a.href); }
+    function loadProject(e){ const file=e.target.files[0]; if(!file) return; const fr=new FileReader(); fr.onload=()=>{ try{ applyProjectData(JSON.parse(fr.result)); currentProjectName=file.name.replace(/\.json$/i,''); onlineNameInput.value=currentProjectName; }catch(err){ alert('Hibás fájl.'); } }; fr.readAsText(file); e.target.value=''; }
+    function setOnlineUiState(available, message){
+      onlineAvailable = available;
+      $('#saveOnline').disabled = !available;
+      $('#refreshOnline').disabled = false;
+      onlineList.disabled = !available || !onlineFiles.length;
+      $('#loadOnline').disabled = !available || !onlineList.value;
+      onlineStatus.textContent = message;
+    }
+    function renderOnlineFiles(preferredName=''){
+      const selected = preferredName || currentProjectName || onlineList.value;
+      onlineList.innerHTML = '';
+      const placeholder=document.createElement('option');
+      placeholder.value='';
+      placeholder.textContent = onlineFiles.length ? 'Online rajzok' : 'Nincs online rajz';
+      onlineList.appendChild(placeholder);
+      for(const name of onlineFiles){
+        const opt=document.createElement('option');
+        opt.value=name;
+        opt.textContent=name;
+        if(name===selected) opt.selected=true;
+        onlineList.appendChild(opt);
+      }
+      if(!onlineList.value) onlineList.value='';
+      onlineList.disabled = !onlineAvailable || !onlineFiles.length;
+      $('#loadOnline').disabled = !onlineAvailable || !onlineList.value;
+    }
+    async function requestOnline(action, options={}){
+      const url = new URL(onlineApiUrl);
+      url.searchParams.set('action', action);
+      if (options.query) for (const [key, value] of Object.entries(options.query)) url.searchParams.set(key, value);
+      const response = await fetch(url, { method: options.method || 'GET', headers: options.headers, body: options.body });
+      let payload = null;
+      try{ payload = await response.json(); }catch(err){ throw new Error('Az online mentés válasza nem olvasható.'); }
+      if (!response.ok || !payload || payload.ok===false) throw new Error((payload && payload.error) || 'Az online mentés nem érhető el.');
+      return payload;
+    }
+    async function refreshOnlineFiles({force=false}={}){
+      if (!/^https?:$/i.test(location.protocol)){ onlineFiles=[]; renderOnlineFiles(); setOnlineUiState(false,'Online mentés: csak webszerverről érhető el'); return; }
+      if (!navigator.onLine && !force){ onlineFiles=[]; renderOnlineFiles(); setOnlineUiState(false,'Online mentés: nincs internetkapcsolat'); return; }
+      setOnlineUiState(false,'Online mentés: kapcsolat ellenőrzése…');
+      try{
+        const result = await requestOnline('list');
+        onlineFiles = Array.isArray(result.files) ? result.files : [];
+        renderOnlineFiles(result.current || currentProjectName);
+        const countText = onlineFiles.length ? ` (${onlineFiles.length} db)` : '';
+        setOnlineUiState(true,'Online mentés: elérhető'+countText);
+      }catch(err){
+        onlineFiles=[]; renderOnlineFiles();
+        const fallback = navigator.onLine ? 'Online mentés: nem érhető el' : 'Online mentés: nincs internetkapcsolat';
+        setOnlineUiState(false, fallback);
+      }
+    }
+    async function saveProjectOnline(){
+      const requestedName=sanitizeProjectName(onlineNameInput.value||currentProjectName);
+      if(!requestedName){ alert('Adj meg egy online fájlnevet.'); onlineNameInput.focus(); return; }
+      try{
+        setOnlineUiState(false,'Online mentés: mentés folyamatban…');
+        const result = await requestOnline('save', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name: requestedName, project: collectProjectData() }) });
+        currentProjectName = result.name || requestedName;
+        onlineNameInput.value = currentProjectName;
+        await refreshOnlineFiles({force:true});
+      }catch(err){
+        setOnlineUiState(false, 'Online mentés: hiba');
+        alert(err.message);
+      }
+    }
+    async function loadSelectedOnlineProject(){
+      const name = onlineList.value;
+      if(!name){ alert('Válassz egy online rajzot.'); return; }
+      try{
+        const result = await requestOnline('load', { query:{ name } });
+        applyProjectData(result.project);
+        currentProjectName = result.name || name;
+        onlineNameInput.value = currentProjectName;
+        renderOnlineFiles(currentProjectName);
+      }catch(err){
+        alert(err.message);
+      }
+    }
 
     function exportPNG(){
       const w=draw.width,h=draw.height;
@@ -674,6 +822,9 @@
     document.getElementById('eraser').value = pxToExpSlider(brushMode==='screen' ? eraserScreenPx : eraserWorldPx);
     updateBrushOut(); updatePanels();
     renderPalette();
+    refreshOnlineFiles();
+    window.addEventListener('online', ()=> refreshOnlineFiles({force:true}));
+    window.addEventListener('offline', ()=> refreshOnlineFiles());
 
     // Helpers
     function fileToDataUrl(file){ return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res({name:file.name,type:file.type,dataUrl:fr.result}); fr.onerror=rej; fr.readAsDataURL(file); }); }
