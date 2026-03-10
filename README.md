@@ -3,4 +3,4 @@ online rajzoló felület, rajzok megosztásához valamint külön érdekesség, 
 
 ## Online mentés
 
-Töltsd fel a `draw5.html` és a `draw5_store.php` fájlokat ugyanabba a webszerveres mappába. A `draw5.html` statikus fájlként is működik, és ha a `draw5_store.php` elérhető, akkor a rajzok név szerint online is menthetők és visszatölthetők. A PHP fájl automatikusan létrehozza a `draw5_store_data` mappát a mentésekhez.
+Töltsd fel a `draw5_store.php` fájlt egy PHP-t támogató webszerverre. A `draw5.html` statikus fájlként is működik, és alapból a `https://benderbalazs.hu/draw2/draw5_store.php` végpontot használja online mentéshez/betöltéshez, ezért más helyről is elérheti az online rajzokat. A PHP fájl automatikusan létrehozza a `draw5_store_data` mappát a mentésekhez.

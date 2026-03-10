@@ -226,7 +226,13 @@
     const onlineNameInput = $('#onlineName');
     const onlineList = $('#onlineList');
     const onlineStatus = $('#onlineStatus');
-    const onlineApiUrl = new URL('draw5_store.php', window.location.href).href;
+    const DEFAULT_ONLINE_API_URL = 'https://benderbalazs.hu/draw2/draw5_store.php';
+    const onlineApiUrl = (() => {
+      const qsUrl = new URLSearchParams(window.location.search).get('store');
+      if (qsUrl) return qsUrl;
+      if (typeof window.DRAW5_STORE_URL === 'string' && window.DRAW5_STORE_URL.trim()) return window.DRAW5_STORE_URL.trim();
+      return DEFAULT_ONLINE_API_URL;
+    })();
     let onlineAvailable = false;
     let onlineFiles = [];
     let currentProjectName = '';
