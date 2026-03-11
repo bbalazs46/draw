@@ -671,7 +671,7 @@
       $('#loadOnline').disabled = !onlineAvailable || !onlineList.value;
     }
     async function requestOnline(action, options={}){
-      const url = new URL(onlineApiUrl);
+      const url = new URL(onlineApiUrl, window.location.href);
       url.searchParams.set('action', action);
       if (options.query) for (const [key, value] of Object.entries(options.query)) url.searchParams.set(key, value);
       const response = await fetch(url, { method: options.method || 'GET', headers: options.headers, body: options.body });
@@ -681,7 +681,6 @@
       return payload;
     }
     async function refreshOnlineFiles({force=false}={}){
-      if (!/^https?:$/i.test(location.protocol)){ onlineFiles=[]; renderOnlineFiles(); setOnlineUiState(false,'Online mentés: csak webszerverről érhető el'); return; }
       if (!navigator.onLine && !force){ onlineFiles=[]; renderOnlineFiles(); setOnlineUiState(false,'Online mentés: nincs internetkapcsolat'); return; }
       setOnlineUiState(false,'Online mentés: kapcsolat ellenőrzése…');
       try{
