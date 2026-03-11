@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Végtelen vászon – vázlatfüzet</title>
+  <title>Végtelen vászon – vázlatfüzet 2</title>
   <style>
     :root { --bg:#0f1115; --panel:#151922; --muted:#9aa4b2; --text:#e6e9ef; --brand:#6ea8fe; --danger:#ff6b6b; --success:#7bd88f; --warning:#ffd166; --grid-major:rgba(255,255,255,.08); --grid-minor:rgba(255,255,255,.04); --accent:#7c7cff; }
     *{box-sizing:border-box}
@@ -229,7 +229,7 @@
     const onlineNameInput = $('#onlineName');
     const onlineList = $('#onlineList');
     const onlineStatus = $('#onlineStatus');
-    const DEFAULT_ONLINE_API_URL = 'https://benderbalazs.hu/draw2/draw5_store.php';
+    const DEFAULT_ONLINE_API_URL = 'https://benderbalazs.hu/draw/draw5_store.php';
     const onlineApiUrl = (() => {
       const qsUrl = new URLSearchParams(window.location.search).get('store');
       if (qsUrl) return qsUrl;
