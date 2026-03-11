@@ -43,11 +43,14 @@
     .toolbar .break{flex-basis:100%;height:0}
     .palette-slot{width:28px;height:28px;border-radius:6px;border:2px solid rgba(255,255,255,.15);cursor:pointer;padding:0;flex-shrink:0}
     .palette-slot.active{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand)}
+    .toolbar-collapsed .collapsible{display:none!important}
+    #menuToggle{min-width:36px;font-size:16px}
   </style>
 </head>
 <body>
   <header>
     <div class="toolbar">
+      <button id="menuToggle" class="btn" title="Menü elrejtése" data-tip="Menü (M)">☰</button>
       <div class="tools">
         <div class="group" role="group" aria-label="Eszközök">
           <button id="tool-pencil" class="active" data-tip="Ceruza (B)">✏️</button>
@@ -56,7 +59,7 @@
           <button id="tool-select" data-tip="Kijelölés (S)">🔲</button>
           <button id="tool-pin" data-tip="Fájlpont (P)">📎</button>
         </div>
-        <div class="group">
+        <div class="group collapsible">
           <label class="row" data-tip="Szín"><span class="readout">Szín</span><input id="color" type="color" value="#ffb703"/></label>
           <label class="row" data-tip="Háttér színe"><span class="readout">Háttér</span><input id="bgColor" type="color" value="#0f1115"/></label>
         </div>
@@ -66,17 +69,17 @@
           <button id="paletteAdd" class="btn" data-tip="Szín hozzáadása palettára">+</button>
           <button id="paletteDel" class="btn danger" data-tip="Aktív szín eltávolítása palettáról">−</button>
         </div>
-        <span class="break"></span>
-        <div class="group">
+        <span class="break collapsible"></span>
+        <div class="group collapsible">
           <div class="slider" data-tip="Ecsetméret (exp.)"><span class="readout">Ecset</span><input id="brush" type="range" min="0" max="100" value="30" /><span id="brushOut" class="readout">12 px</span></div>
           <div class="slider" data-tip="Radír méret (exp.)"><span class="readout">Radír</span><input id="eraser" type="range" min="0" max="100" value="40" /><span id="eraserOut" class="readout">16 px</span></div>
           <div class="slider" data-tip="Vonal sűrűség (−100…100%; negatív: halvány radír)"><span class="readout">Átlátszóság</span><input id="alpha" type="range" min="-100" max="100" value="100" /><span id="alphaOut" class="readout">100%</span></div>
           <div class="row" data-tip="Ecset mértékegység"><span class="readout">Mérték</span><select id="brushUnit"><option value="screen" selected>Képernyő px</option><option value="world">Világ px</option></select></div>
         </div>
-        <div class="group">
+        <div class="group collapsible">
           <label class="row" title="Érintéssel is lehessen rajzolni?"><input id="touchDraw" type="checkbox" /><span class="readout">Érintéssel rajzolás</span></label>
         </div>
-        <div class="group" id="pinPanel" style="display:none">
+        <div class="group collapsible" id="pinPanel" style="display:none">
           <label class="row" data-tip="Fájlpont színe"><span class="readout">Pin szín</span><input id="pinColor" type="color" value="#7c7cff"/></label>
           <div class="slider" data-tip="Pin mérete (6–32 px)"><span class="readout">Pin</span><input id="pinSize" type="range" min="6" max="32" value="12" /><span id="pinSizeOut" class="readout">12 px</span></div>
           <label class="row"><span class="readout">Jelszó</span><input id="pinPass" type="password" placeholder="(opcionális)" /></label>
@@ -87,7 +90,7 @@
           <button id="pinDelete" class="btn danger">Törlés</button>
           <input id="pinReplaceFile" type="file" style="display:none" />
         </div>
-        <div class="group" id="recPanel" style="display:none">
+        <div class="group collapsible" id="recPanel" style="display:none">
           <button id="recBtn" class="btn">🎙️ Felvétel</button>
           <span id="recStatus" class="readout">—</span>
         </div>
@@ -100,7 +103,7 @@
           <button id="clear" class="btn danger" data-tip="Teljes törlés">🗑️ Törlés</button>
         </div>
       </div>
-      <div class="tools" style="margin-left:auto;">
+      <div class="tools collapsible" style="margin-left:auto;">
         <div class="group"><span class="readout">Zoom: <strong id="zoomOut">100%</strong></span></div>
         <div class="group"><label class="row" title="A rács fix 50 VILÁGpx raszteren marad"><input id="gridLock" type="checkbox" /> <span class="readout">Rács fix 50 világ px</span></label></div>
         <div class="group">
@@ -137,7 +140,7 @@
   <div class="footer">
     <details><summary class="readout">Segítség & gyorsbillentyűk</summary>
       <div style="background:rgba(0,0,0,.35);padding:8px 10px;border:1px solid rgba(255,255,255,.12);border-radius:8px">
-        <div><span class="kbd">B</span> ceruza • <span class="kbd">E</span> radír • <span class="kbd">I</span> pipetta • <span class="kbd">S</span> kijelölés • <span class="kbd">P</span> fájlpont • Görgő: zoom • Középső gomb: pan • Pinch: zoom/pan</div>
+        <div><span class="kbd">B</span> ceruza • <span class="kbd">E</span> radír • <span class="kbd">I</span> pipetta • <span class="kbd">S</span> kijelölés • <span class="kbd">P</span> fájlpont • <span class="kbd">M</span> menü • Görgő: zoom • Középső gomb: pan • Pinch: zoom/pan</div>
         <div><span class="kbd">Ctrl+Z</span> visszavonás • <span class="kbd">Ctrl+Y</span> újra • <span class="kbd">Del</span> törlés</div>
       </div>
     </details>
@@ -336,6 +339,14 @@
     $('#tool-select').addEventListener('click', ()=> setTool('select'));
     $('#tool-pin').addEventListener('click', ()=> setTool('pin'));
 
+    const menuToggle = $('#menuToggle');
+    const toolbar = document.querySelector('.toolbar');
+    menuToggle.addEventListener('click', ()=>{
+      const collapsed = toolbar.classList.toggle('toolbar-collapsed');
+      menuToggle.textContent = collapsed ? '✕' : '☰';
+      menuToggle.title = collapsed ? 'Menü megjelenítése' : 'Menü elrejtése';
+    });
+
     $('#undo').addEventListener('click', doUndo); $('#redo').addEventListener('click', doRedo);
     $('#clear').addEventListener('click', ()=>{ if(confirm('Biztosan törlöd az egész rajzot?')){ strokes.length=0; pins.length=0; undoStack.length=0; redoStack.length=0; selectedPin=-1; clearSelection(); redrawAll(); updateSelButton(); }});
 
@@ -405,6 +416,7 @@
       else if (e.key.toLowerCase()==='i'){ setTool('picker'); }
       else if (e.key.toLowerCase()==='s'){ setTool('select'); }
       else if (e.key.toLowerCase()==='p'){ setTool('pin'); }
+      else if (e.key.toLowerCase()==='m'){ menuToggle.click(); }
       else if (e.key==='Escape'){ clearSelection(); updateSelButton(); }
       else if (e.key==='Delete'){
         if (selectedPin>=0){ const removed=pins.splice(selectedPin,1)[0]; pushUndo({type:'pin-delete', index:selectedPin, pin:deepCopy(removed)}); selectedPin=-1; drawPins(); }
