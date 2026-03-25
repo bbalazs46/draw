@@ -14,6 +14,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 $dataDir = __DIR__ . DIRECTORY_SEPARATOR . 'draw5_store_data';
 $maxRequestBytes = 25 * 1024 * 1024;
+const PRESENCE_STROKE_POINTS_LIMIT = 160;
+const PRESENCE_TTL_SECONDS = 15;
 
 respond(handleRequest($dataDir, $maxRequestBytes));
 
@@ -28,6 +30,7 @@ function handleRequest(string $dataDir, int $maxRequestBytes): array
         'list' => listProjects($dataDir),
         'load' => loadProject($dataDir),
         'save' => saveProject($dataDir, $maxRequestBytes),
+        'presence' => updatePresence($dataDir, $maxRequestBytes),
         default => errorResponse('Ismeretlen művelet.', 400),
     };
 }
@@ -74,7 +77,7 @@ function loadProject(string $dataDir): array
         return errorResponse('A mentett online rajz sérült.', 500);
     }
 
-    return ['status' => 200, 'body' => ['ok' => true, 'name' => $name, 'project' => $project]];
+    return ['status' => 200, 'body' => ['ok' => true, 'name' => $name, 'project' => $project, 'revision' => loadProjectRevision($dataDir, $name)]];
 }
 
 function saveProject(string $dataDir, int $maxRequestBytes): array
@@ -116,7 +119,102 @@ function saveProject(string $dataDir, int $maxRequestBytes): array
         return errorResponse('Nem sikerült elmenteni az online rajzot.', 500);
     }
 
-    return ['status' => 200, 'body' => ['ok' => true, 'name' => $name]];
+    $revision = bumpProjectRevision($dataDir, $name);
+    if ($revision <= 0) {
+        return errorResponse('Nem sikerült frissíteni a rajz verzióját.', 500);
+    }
+
+    return ['status' => 200, 'body' => ['ok' => true, 'name' => $name, 'revision' => $revision]];
+}
+
+function updatePresence(string $dataDir, int $maxRequestBytes): array
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        return errorResponse('A jelenléthez POST kérés szükséges.', 405);
+    }
+
+    $raw = file_get_contents('php://input');
+    if ($raw === false || $raw === '') {
+        return errorResponse('Hiányzó kérés törzs.', 400);
+    }
+    if (strlen($raw) > $maxRequestBytes) {
+        return errorResponse('A jelenléti kérés túl nagy.', 413);
+    }
+
+    $payload = json_decode($raw, true);
+    if (!is_array($payload)) {
+        return errorResponse('Hibás JSON kérés.', 400);
+    }
+
+    $name = sanitizeProjectName($payload['name'] ?? '');
+    if ($name === null) {
+        return errorResponse('Hiányzó vagy hibás fájlnév.', 400);
+    }
+
+    $clientId = sanitizeClientId($payload['clientId'] ?? '');
+    if ($clientId === null) {
+        return errorResponse('Hiányzó vagy hibás kliensazonosító.', 400);
+    }
+
+    $state = sanitizePresenceState($payload['state'] ?? null);
+    if ($state === null) {
+        return errorResponse('Hibás jelenléti állapot.', 400);
+    }
+
+    $presenceDir = presenceDir($dataDir);
+    if (!is_dir($presenceDir) && !mkdir($presenceDir, 0700, true) && !is_dir($presenceDir)) {
+        return errorResponse('Nem sikerült létrehozni a jelenléti mappát.', 500);
+    }
+
+    $path = presencePath($dataDir, $name);
+    $entries = loadJsonFile($path);
+    if (!is_array($entries)) {
+        $entries = [];
+    }
+
+    $now = time();
+    $sanitizedEntries = [];
+    foreach ($entries as $entry) {
+        if (!is_array($entry)) {
+            continue;
+        }
+        $entryClientId = sanitizeClientId($entry['clientId'] ?? '');
+        $entryState = sanitizePresenceState($entry['state'] ?? null);
+        $updatedAt = (int) ($entry['updatedAt'] ?? 0);
+        if ($entryClientId === null || $entryState === null || $updatedAt < ($now - PRESENCE_TTL_SECONDS)) {
+            continue;
+        }
+        $sanitizedEntries[$entryClientId] = [
+            'clientId' => $entryClientId,
+            'state' => $entryState,
+            'updatedAt' => $updatedAt,
+        ];
+    }
+
+    $sanitizedEntries[$clientId] = [
+        'clientId' => $clientId,
+        'state' => $state,
+        'updatedAt' => $now,
+    ];
+
+    $stored = array_values($sanitizedEntries);
+    if (file_put_contents($path, json_encode($stored, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX) === false) {
+        return errorResponse('Nem sikerült frissíteni a jelenléti adatokat.', 500);
+    }
+
+    $clients = [];
+    foreach ($stored as $entry) {
+        $clients[] = array_merge(['clientId' => $entry['clientId']], $entry['state']);
+    }
+
+    return [
+        'status' => 200,
+        'body' => [
+            'ok' => true,
+            'clients' => $clients,
+            'revision' => loadProjectRevision($dataDir, $name),
+        ],
+    ];
 }
 
 function sanitizeProjectName(mixed $value): ?string
@@ -152,9 +250,174 @@ function sanitizeProjectName(mixed $value): ?string
     return $name !== '' ? $name : null;
 }
 
+function sanitizeClientId(mixed $value): ?string
+{
+    if (!is_string($value)) {
+        return null;
+    }
+
+    $value = trim($value);
+    if ($value === '' || strlen($value) > 120 || str_contains($value, '..')) {
+        return null;
+    }
+
+    return preg_match('/^[A-Za-z0-9_-]+$/', $value) === 1 ? $value : null;
+}
+
+function sanitizePresenceState(mixed $value): ?array
+{
+    if (!is_array($value)) {
+        return null;
+    }
+
+    $tool = $value['tool'] ?? 'pencil';
+    if (!is_string($tool) || !in_array($tool, ['pencil', 'eraser', 'picker', 'select', 'pin'], true)) {
+        $tool = 'pencil';
+    }
+
+    $state = [
+        'x' => sanitizeFiniteNumber($value['x'] ?? null),
+        'y' => sanitizeFiniteNumber($value['y'] ?? null),
+        'tool' => $tool,
+        'drawing' => !empty($value['drawing']),
+        'color' => sanitizeHexColor($value['color'] ?? null) ?? '#7c7cff',
+        'alpha' => clampFloat(sanitizeFiniteNumber($value['alpha'] ?? 1.0) ?? 1.0, 0.0, 1.0),
+        'useWorld' => !empty($value['useWorld']),
+        'sizeWorld' => sanitizeFiniteNumber($value['sizeWorld'] ?? null),
+        'sizeScreenPx' => sanitizeFiniteNumber($value['sizeScreenPx'] ?? null),
+        'eraserWorldPx' => sanitizeFiniteNumber($value['eraserWorldPx'] ?? null),
+        'eraserScreenPx' => sanitizeFiniteNumber($value['eraserScreenPx'] ?? null),
+    ];
+
+    $stroke = sanitizePresenceStroke($value['stroke'] ?? null);
+    if ($stroke !== null) {
+        $state['stroke'] = $stroke;
+    }
+
+    return $state;
+}
+
+function sanitizePresenceStroke(mixed $value): ?array
+{
+    if (!is_array($value)) {
+        return null;
+    }
+
+    $rawPoints = is_array($value['points'] ?? null) ? $value['points'] : [];
+    $points = [];
+    foreach (array_slice($rawPoints, -PRESENCE_STROKE_POINTS_LIMIT) as $point) {
+        if (!is_array($point)) {
+            continue;
+        }
+        $x = sanitizeFiniteNumber($point['x'] ?? null);
+        $y = sanitizeFiniteNumber($point['y'] ?? null);
+        if ($x === null || $y === null) {
+            continue;
+        }
+        $points[] = ['x' => $x, 'y' => $y];
+    }
+
+    if ($points === []) {
+        return null;
+    }
+
+    return [
+        'color' => sanitizeHexColor($value['color'] ?? null) ?? '#7c7cff',
+        'alpha' => clampFloat(sanitizeFiniteNumber($value['alpha'] ?? 1.0) ?? 1.0, 0.0, 1.0),
+        'useWorld' => !empty($value['useWorld']),
+        'sizeWorld' => sanitizeFiniteNumber($value['sizeWorld'] ?? null),
+        'sizeScreenPx' => sanitizeFiniteNumber($value['sizeScreenPx'] ?? null),
+        'points' => $points,
+    ];
+}
+
 function projectPath(string $dataDir, string $name): string
 {
     return $dataDir . DIRECTORY_SEPARATOR . $name . '.json';
+}
+
+function metaDir(string $dataDir): string
+{
+    return $dataDir . DIRECTORY_SEPARATOR . '_meta';
+}
+
+function presenceDir(string $dataDir): string
+{
+    return $dataDir . DIRECTORY_SEPARATOR . '_presence';
+}
+
+function metaPath(string $dataDir, string $name): string
+{
+    return metaDir($dataDir) . DIRECTORY_SEPARATOR . $name . '.json';
+}
+
+function presencePath(string $dataDir, string $name): string
+{
+    return presenceDir($dataDir) . DIRECTORY_SEPARATOR . $name . '.json';
+}
+
+function loadProjectRevision(string $dataDir, string $name): int
+{
+    $meta = loadJsonFile(metaPath($dataDir, $name));
+    $revision = is_array($meta) ? (int) ($meta['revision'] ?? 0) : 0;
+    return max(1, $revision);
+}
+
+function bumpProjectRevision(string $dataDir, string $name): int
+{
+    $dir = metaDir($dataDir);
+    if (!is_dir($dir) && !mkdir($dir, 0700, true) && !is_dir($dir)) {
+        return 0;
+    }
+
+    $path = metaPath($dataDir, $name);
+    $meta = loadJsonFile($path);
+    $revision = is_array($meta) ? (int) ($meta['revision'] ?? 0) : 0;
+    $revision = max(0, $revision) + 1;
+    $encoded = json_encode(['revision' => $revision, 'updatedAt' => time()], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($encoded === false || file_put_contents($path, $encoded, LOCK_EX) === false) {
+        return 0;
+    }
+
+    return $revision;
+}
+
+function loadJsonFile(string $path): mixed
+{
+    if (!is_file($path)) {
+        return null;
+    }
+
+    $content = file_get_contents($path);
+    if ($content === false || $content === '') {
+        return null;
+    }
+
+    return json_decode($content, true);
+}
+
+function sanitizeFiniteNumber(mixed $value): ?float
+{
+    if (!is_int($value) && !is_float($value)) {
+        return null;
+    }
+    if (!is_finite((float) $value)) {
+        return null;
+    }
+    return (float) $value;
+}
+
+function sanitizeHexColor(mixed $value): ?string
+{
+    if (!is_string($value)) {
+        return null;
+    }
+    return preg_match('/^#[0-9a-fA-F]{6}$/', $value) === 1 ? strtolower($value) : null;
+}
+
+function clampFloat(float $value, float $min, float $max): float
+{
+    return max($min, min($max, $value));
 }
 
 function errorResponse(string $message, int $status): array

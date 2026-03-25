@@ -239,6 +239,31 @@
     let onlineAvailable = false;
     let onlineFiles = [];
     let currentProjectName = '';
+    let activeOnlineProjectName = '';
+    let currentProjectRevision = 0;
+    const syncClientId = (() => {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+      if (window.crypto && typeof window.crypto.getRandomValues === 'function'){
+        const bytes = new Uint32Array(4);
+        window.crypto.getRandomValues(bytes);
+        return 'client-' + Array.from(bytes, value => value.toString(36)).join('-');
+      }
+      return 'client-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    })();
+    const remoteClients = new Map();
+    const SYNC_POLL_MS = 250;
+    const SYNC_IDLE_POLL_MS = 800;
+    const AUTOSAVE_DEBOUNCE_MS = 700;
+    const LIVE_STROKE_POINTS_LIMIT = 160;
+    let syncTimer = null;
+    let syncRequestPending = false;
+    let autosaveTimer = null;
+    let autosavePending = false;
+    let queuedManualSave = false;
+    let syncDirty = false;
+    let syncApplyInProgress = false;
+    let lastCursorWorld = null;
+    let lastSyncStatusText = '';
 
     function updatePanels(){ const showPinStuff = tool==='pin' && !drawing; pinPanel.style.display = showPinStuff ? '' : 'none'; recPanel.style.display = showPinStuff ? '' : 'none'; updateSelButton(); }
     function updateSelButton(){ selClearBtn.style.display = (tool==='select' && sel) ? '' : 'none'; }
@@ -258,6 +283,145 @@
 
     const deepCopy = (o)=> JSON.parse(JSON.stringify(o));
     const pushUndo = (action)=>{ undoStack.push(action); redoStack.length=0; };
+    function getSharedProjectName(){ return activeOnlineProjectName || ''; }
+    function hasActiveOnlineProject(){ return !!getSharedProjectName(); }
+    function setSyncStatus(message){
+      lastSyncStatusText = message;
+      onlineStatus.textContent = message;
+    }
+    function remoteClientLabel(clientId){ return 'Társ ' + clientId.slice(-4).toUpperCase(); }
+    function clearRemotePresence(){ remoteClients.clear(); renderOverlay(); }
+    function markProjectDirty({ immediate=false } = {}){
+      if (syncApplyInProgress) return;
+      syncDirty = true;
+      if (!hasActiveOnlineProject()) return;
+      if (autosaveTimer) clearTimeout(autosaveTimer);
+      autosaveTimer = setTimeout(()=>{
+        autosaveTimer = null;
+        saveProjectOnline({ silent:true });
+      }, immediate ? 0 : AUTOSAVE_DEBOUNCE_MS);
+    }
+    function updateOnlineSyncState(name, revision=0){
+      activeOnlineProjectName = name || '';
+      currentProjectRevision = Number.isFinite(revision) ? revision : 0;
+      syncDirty = false;
+      if (!activeOnlineProjectName){
+        if (autosaveTimer) clearTimeout(autosaveTimer);
+        autosaveTimer = null;
+        clearRemotePresence();
+        stopRealtimeSync();
+        if (onlineAvailable) setSyncStatus('Online mentés: elérhető');
+        return;
+      }
+      startRealtimeSync();
+      setSyncStatus('Online szinkron: aktív');
+    }
+    function queuePresenceSync(){
+      if (!hasActiveOnlineProject()) return;
+      if (syncTimer) return;
+      syncTimer = setTimeout(()=>{
+        syncTimer = null;
+        syncOnlinePresence();
+      }, 0);
+    }
+    function startRealtimeSync(){
+      if (!hasActiveOnlineProject()) return;
+      if (syncTimer) clearTimeout(syncTimer);
+      syncTimer = null;
+      queuePresenceSync();
+    }
+    function stopRealtimeSync(){
+      if (syncTimer) clearTimeout(syncTimer);
+      syncTimer = null;
+    }
+    function scheduleNextPresenceSync(){
+      if (!hasActiveOnlineProject()) return;
+      if (syncTimer) clearTimeout(syncTimer);
+      const delay = remoteClients.size || drawing ? SYNC_POLL_MS : SYNC_IDLE_POLL_MS;
+      syncTimer = setTimeout(()=>{
+        syncTimer = null;
+        syncOnlinePresence();
+      }, delay);
+    }
+    function cursorPreviewRadiusPxFor(toolName, presence){
+      if (toolName==='pencil'){
+        return presence.useWorld ? ((presence.sizeWorld || 1) * s) / 2 : (presence.sizeScreenPx || 1) / 2;
+      }
+      if (toolName==='eraser'){
+        return presence.useWorld ? ((presence.eraserWorldPx || 1) * s) / 2 : (presence.eraserScreenPx || 1) / 2;
+      }
+      return 6;
+    }
+    function buildPresencePayload(){
+      const payload = {
+        x: lastCursorWorld ? lastCursorWorld.x : null,
+        y: lastCursorWorld ? lastCursorWorld.y : null,
+        tool,
+        drawing,
+        color,
+        alpha: alphaPct / 100,
+        useWorld: brushMode === 'world',
+        sizeWorld: brushMode === 'world' ? brushWorldPx : null,
+        sizeScreenPx: brushMode === 'screen' ? brushScreenPx : null,
+        eraserWorldPx,
+        eraserScreenPx
+      };
+      if (drawing && tool === 'pencil' && strokes.length){
+        const stroke = strokes[strokes.length - 1];
+        payload.stroke = {
+          color: getStrokeColor(stroke),
+          alpha: stroke.alpha,
+          useWorld: !!stroke.useWorld,
+          sizeWorld: stroke.sizeWorld ?? null,
+          sizeScreenPx: stroke.sizeScreenPx ?? null,
+          points: stroke.points.slice(-LIVE_STROKE_POINTS_LIMIT)
+        };
+      }
+      return payload;
+    }
+    async function syncOnlinePresence(){
+      if (!hasActiveOnlineProject() || syncRequestPending) return;
+      syncRequestPending = true;
+      try{
+        const result = await requestOnline('presence', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            name: getSharedProjectName(),
+            clientId: syncClientId,
+            state: buildPresencePayload()
+          })
+        });
+        const clients = Array.isArray(result.clients) ? result.clients : [];
+        remoteClients.clear();
+        for (const client of clients){
+          if (!client || client.clientId === syncClientId) continue;
+          remoteClients.set(client.clientId, client);
+        }
+        renderOverlay();
+        const nextRevision = Number(result.revision || 0);
+        if (nextRevision > currentProjectRevision && !syncApplyInProgress){
+          const loaded = await requestOnline('load', { query:{ name:getSharedProjectName() } });
+          syncApplyInProgress = true;
+          try{
+            applyProjectData(loaded.project, { preserveView:true, preserveEditorSettings:true });
+          }finally{
+            syncApplyInProgress = false;
+          }
+          currentProjectRevision = Number(loaded.revision || nextRevision || currentProjectRevision);
+          syncDirty = false;
+        } else if (nextRevision){
+          currentProjectRevision = nextRevision;
+        }
+        const others = clients.filter(client => client && client.clientId !== syncClientId).length;
+        setSyncStatus(`Online szinkron: aktív${others ? ` (${others + 1} megnyitás)` : ''}`);
+      }catch(err){
+        setSyncStatus('Online szinkron: kapcsolat hiba');
+      }finally{
+        syncRequestPending = false;
+        scheduleNextPresenceSync();
+      }
+    }
 
     function updateBrushOut(){
       brushOut.textContent = (brushMode==='screen')? `${brushScreenPx} px` : `${brushWorldPx} vpx`;
@@ -272,10 +436,11 @@
         palette[activePaletteIndex]=color;
         renderPalette();
         redrawAll();
+        markProjectDirty();
       }
       drawCursorPreview(lastMovePos);
     });
-    $('#bgColor').addEventListener('change', e=>{ bgColor=e.target.value; document.documentElement.style.setProperty('--bg', bgColor); redrawAll(); });
+    $('#bgColor').addEventListener('change', e=>{ bgColor=e.target.value; document.documentElement.style.setProperty('--bg', bgColor); redrawAll(); markProjectDirty(); });
 
     // Paletta funkciók
     function renderPalette(){
@@ -302,6 +467,7 @@
       palette.push(color||'#ffffff');
       activePaletteIndex=palette.length-1;
       renderPalette();
+      markProjectDirty();
     });
     document.getElementById('paletteDel').addEventListener('click',()=>{
       if(palette.length<=1) return;
@@ -316,6 +482,7 @@
       document.getElementById('color').value=color;
       renderPalette();
       redrawAll();
+      markProjectDirty();
     });
 
     $('#brush').addEventListener('input', e=>{ const val=expSliderToPx(+e.target.value); if (brushMode==='screen') brushScreenPx=val; else brushWorldPx=val; updateBrushOut(); drawCursorPreview(lastMovePos); });
@@ -348,7 +515,7 @@
     });
 
     $('#undo').addEventListener('click', doUndo); $('#redo').addEventListener('click', doRedo);
-    $('#clear').addEventListener('click', ()=>{ if(confirm('Biztosan törlöd az egész rajzot?')){ strokes.length=0; pins.length=0; undoStack.length=0; redoStack.length=0; selectedPin=-1; clearSelection(); redrawAll(); updateSelButton(); }});
+    $('#clear').addEventListener('click', ()=>{ if(confirm('Biztosan törlöd az egész rajzot?')){ strokes.length=0; pins.length=0; undoStack.length=0; redoStack.length=0; selectedPin=-1; clearSelection(); redrawAll(); updateSelButton(); markProjectDirty({immediate:true}); }});
 
     $('#save').addEventListener('click', saveProject);
     $('#load').addEventListener('click', ()=> $('#loadFile').click());
@@ -370,14 +537,14 @@
     // pin UI
     $('#pinChoose').addEventListener('click', ()=> $('#pinFile').click());
     $('#pinFile').addEventListener('change', async (e)=>{ const f=e.target.files[0]; if(!f) return; pendingPinFile = await fileToDataUrl(f); e.target.value=''; setTool('pin'); });
-    $('#pinColor').addEventListener('input', e=>{ if (selectedPin>=0){ pins[selectedPin].color=e.target.value; drawPins(); } else { pinColor=e.target.value; } });
-    $('#pinSize').addEventListener('input', e=>{ const v=+e.target.value; document.getElementById('pinSizeOut').textContent=v+' px'; if (selectedPin>=0){ pins[selectedPin].sizePx=v; drawPins(); } else { pinSizePx=v; } });
-    $('#pinPass').addEventListener('input', e=>{ if (selectedPin>=0) pins[selectedPin].password=e.target.value||null; else pinPassword=e.target.value; });
+    $('#pinColor').addEventListener('input', e=>{ if (selectedPin>=0){ pins[selectedPin].color=e.target.value; drawPins(); markProjectDirty(); } else { pinColor=e.target.value; } });
+    $('#pinSize').addEventListener('input', e=>{ const v=+e.target.value; document.getElementById('pinSizeOut').textContent=v+' px'; if (selectedPin>=0){ pins[selectedPin].sizePx=v; drawPins(); markProjectDirty(); } else { pinSizePx=v; } });
+    $('#pinPass').addEventListener('input', e=>{ if (selectedPin>=0){ pins[selectedPin].password=e.target.value||null; markProjectDirty(); } else pinPassword=e.target.value; });
 
     $('#pinOpen').addEventListener('click', ()=>{ if (selectedPin>=0) openPin(selectedPin); });
     $('#pinReplace').addEventListener('click', ()=>{ if (selectedPin>=0) $('#pinReplaceFile').click(); });
-    $('#pinDelete').addEventListener('click', ()=>{ if (selectedPin>=0){ const removed=pins.splice(selectedPin,1)[0]; pushUndo({type:'pin-delete', index:selectedPin, pin:deepCopy(removed)}); selectedPin=-1; drawPins(); }});
-    $('#pinReplaceFile').addEventListener('change', async (e)=>{ const f=e.target.files[0]; if(!f||selectedPin<0) return; const info=await fileToDataUrl(f); const p=pins[selectedPin]; p.name=info.name; p.type=info.type; p.dataUrl=info.dataUrl; e.target.value=''; });
+    $('#pinDelete').addEventListener('click', ()=>{ if (selectedPin>=0){ const removed=pins.splice(selectedPin,1)[0]; pushUndo({type:'pin-delete', index:selectedPin, pin:deepCopy(removed)}); selectedPin=-1; drawPins(); markProjectDirty({immediate:true}); }});
+    $('#pinReplaceFile').addEventListener('change', async (e)=>{ const f=e.target.files[0]; if(!f||selectedPin<0) return; const info=await fileToDataUrl(f); const p=pins[selectedPin]; p.name=info.name; p.type=info.type; p.dataUrl=info.dataUrl; e.target.value=''; markProjectDirty({immediate:true}); });
 
     // felvétel
     const getPreferredAudioMime=()=> (MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported('audio/webm'))?'audio/webm':(MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported('audio/ogg'))?'audio/ogg':'';
@@ -396,6 +563,7 @@
             const dataUrl=await blobToDataURL(blob);
             if (recordingPinIndex!=null&&pins[recordingPinIndex]){ const p=pins[recordingPinIndex]; p.name=name; p.type=blob.type; p.dataUrl=dataUrl; drawPins(); }
             else { pendingPinFile={name,type:blob.type,dataUrl}; setTool('pin'); }
+            markProjectDirty({immediate:true});
             setRecordingUI(false); for (const t of stream.getTracks()) t.stop(); recordingPinIndex=null;
           };
           mediaRecorder.start(); recStart=Date.now(); setRecordingUI(true);
@@ -419,8 +587,8 @@
       else if (e.key.toLowerCase()==='m'){ menuToggle.click(); }
       else if (e.key==='Escape'){ clearSelection(); updateSelButton(); }
       else if (e.key==='Delete'){
-        if (selectedPin>=0){ const removed=pins.splice(selectedPin,1)[0]; pushUndo({type:'pin-delete', index:selectedPin, pin:deepCopy(removed)}); selectedPin=-1; drawPins(); }
-        else if (sel){ const snapshot=captureSelectionSnapshot(sel); deleteSelection(sel); pushUndo({type:'sel-delete', snapshot}); clearSelection(); redrawAll(); } else { strokes.length=0; pins.length=0; undoStack.length=0; redoStack.length=0; redrawAll(); }
+        if (selectedPin>=0){ const removed=pins.splice(selectedPin,1)[0]; pushUndo({type:'pin-delete', index:selectedPin, pin:deepCopy(removed)}); selectedPin=-1; drawPins(); markProjectDirty({immediate:true}); }
+        else if (sel){ const snapshot=captureSelectionSnapshot(sel); deleteSelection(sel); pushUndo({type:'sel-delete', snapshot}); clearSelection(); redrawAll(); markProjectDirty({immediate:true}); } else { strokes.length=0; pins.length=0; undoStack.length=0; redoStack.length=0; redrawAll(); markProjectDirty({immediate:true}); }
         updateSelButton();
       }
     });
@@ -436,8 +604,10 @@
 
     function onPointerDown(e){
       const local=getLocal(e);
+      lastCursorWorld = screenToWorld(local.x,local.y);
       overlay.setPointerCapture(e.pointerId);
       activePointers.set(e.pointerId,{x:local.x,y:local.y,type:e.pointerType});
+      queuePresenceSync();
 
       if (tool==='select'){
         if (sel && pointInRect(local.x,local.y,rectToScreen(sel))){ sel.moving={startX:local.x,startY:local.y}; return; }
@@ -447,9 +617,9 @@
       const hit=hitTestPin(local.x,local.y);
       if (tool==='pin'){
         if (hit!=null){ selectedPin=hit; const p=pins[hit]; const w=screenToWorld(local.x,local.y); pinDrag={idx:hit,offx:w.x-p.x,offy:w.y-p.y,startX:p.x,startY:p.y}; syncPinUI(); drawPins(); return; }
-        if (mediaRecorder && mediaRecorder.state==='recording' && recordingPinIndex==null){ const pt=screenToWorld(local.x,local.y); const pinObj={x:pt.x,y:pt.y,color:pinColor,sizePx:pinSizePx,name:'Felvétel…',type:'audio/*',dataUrl:'',password:pinPassword||null}; pins.push(pinObj); selectedPin=pins.length-1; recordingPinIndex=selectedPin; drawPins(); pushUndo({type:'pin-add',index:selectedPin,pin:deepCopy(pinObj)}); return; }
+        if (mediaRecorder && mediaRecorder.state==='recording' && recordingPinIndex==null){ const pt=screenToWorld(local.x,local.y); const pinObj={x:pt.x,y:pt.y,color:pinColor,sizePx:pinSizePx,name:'Felvétel…',type:'audio/*',dataUrl:'',password:pinPassword||null}; pins.push(pinObj); selectedPin=pins.length-1; recordingPinIndex=selectedPin; drawPins(); pushUndo({type:'pin-add',index:selectedPin,pin:deepCopy(pinObj)}); markProjectDirty({immediate:true}); return; }
         if (!pendingPinFile){ document.getElementById('pinFile').click(); return; }
-        const pt=screenToWorld(local.x,local.y); const newPin={x:pt.x,y:pt.y,color:pinColor,sizePx:pinSizePx,name:pendingPinFile.name,type:pendingPinFile.type,dataUrl:pendingPinFile.dataUrl,password:pinPassword||null}; pins.push(newPin); selectedPin=pins.length-1; pushUndo({type:'pin-add',index:selectedPin,pin:deepCopy(newPin)}); pendingPinFile=null; syncPinUI(); drawPins(); return;
+        const pt=screenToWorld(local.x,local.y); const newPin={x:pt.x,y:pt.y,color:pinColor,sizePx:pinSizePx,name:pendingPinFile.name,type:pendingPinFile.type,dataUrl:pendingPinFile.dataUrl,password:pinPassword||null}; pins.push(newPin); selectedPin=pins.length-1; pushUndo({type:'pin-add',index:selectedPin,pin:deepCopy(newPin)}); pendingPinFile=null; syncPinUI(); drawPins(); markProjectDirty({immediate:true}); return;
       } else if (hit!=null){ openPin(hit); return; }
 
       if (e.button===1){ panStart={x:local.x,y:local.y,tx,ty}; return; }
@@ -467,17 +637,21 @@
         if (useWorld){ sizeWorld=brushWorldPx; } else { sizeScreenPx=brushScreenPx; }
         const stroke={ mode, color, paletteIndex:activePaletteIndex, useWorld, sizeWorld, sizeScreenPx, alpha:(alphaPct/100), points:[pt] };
         strokes.push(stroke); last=pt; strokeUndoPending=true; drawLive(true); drawCursorPreview(local);
+        queuePresenceSync();
       } else if (tool==='eraser'){
         // intelligens radír: érintett teljes stroke törlése
         erasing=true; erasingDeleted = new Map();
         eraseAtPoint(pt);
+        queuePresenceSync();
       }
     }
 
     function onPointerMove(e){
       const local=getLocal(e);
       lastMovePos={x:local.x,y:local.y};
+      lastCursorWorld = screenToWorld(local.x,local.y);
       activePointers.set(e.pointerId,{x:local.x,y:local.y,type:e.pointerType});
+      queuePresenceSync();
       if (countTouchPointers()===2){ pinchUpdate(); drawCursorPreview(local); return; }
 
       if (tool==='select' && sel){
@@ -488,18 +662,19 @@
       if (pinDrag){ const w=screenToWorld(local.x,local.y); const p=pins[pinDrag.idx]; p.x=w.x-pinDrag.offx; p.y=w.y-pinDrag.offy; drawPins(); return; }
 
       if (panStart && e.buttons===4){ const dx=local.x-panStart.x; const dy=local.y-panStart.y; tx=panStart.tx+dx; ty=panStart.ty+dy; redrawAll(); drawCursorPreview(local); return; }
-      if (tool==='eraser' && erasing){ const pt=screenToWorld(local.x,local.y); eraseAtPoint(pt); drawCursorPreview(local); return; }
+      if (tool==='eraser' && erasing){ const pt=screenToWorld(local.x,local.y); eraseAtPoint(pt); queuePresenceSync(); drawCursorPreview(local); return; }
 
       if (!drawing){ drawCursorPreview(local); return; }
       if (e.pointerType==='touch' && !touchDraw){ return; }
 
       const pt=screenToWorld(local.x,local.y);
       if (last && (Math.hypot(pt.x-last.x,pt.y-last.y) < (1/s))){ drawCursorPreview(local); return; }
-      const stroke=strokes[strokes.length-1]; stroke.points.push(pt); last=pt; drawLive(false); drawCursorPreview(local);
+      const stroke=strokes[strokes.length-1]; stroke.points.push(pt); last=pt; drawLive(false); queuePresenceSync(); drawCursorPreview(local);
     }
 
     function onPointerUp(e){
       const local=getLocal(e);
+      lastCursorWorld = screenToWorld(local.x,local.y);
       activePointers.delete(e.pointerId);
       if (panStart && e.button===1){ panStart=null; return; }
       if (countTouchPointers()<2) pinchStart=null;
@@ -509,12 +684,12 @@
         else { computeSelectionItems(sel); drawSelection(); }
       }
 
-      if (pinDrag){ const p=pins[pinDrag.idx]; if (Math.hypot(p.x-pinDrag.startX,p.y-pinDrag.startY)>0){ pushUndo({type:'pin-move',index:pinDrag.idx,from:{x:pinDrag.startX,y:pinDrag.startY},to:{x:p.x,y:p.y}}); } pinDrag=null; }
+      if (pinDrag){ const p=pins[pinDrag.idx]; if (Math.hypot(p.x-pinDrag.startX,p.y-pinDrag.startY)>0){ pushUndo({type:'pin-move',index:pinDrag.idx,from:{x:pinDrag.startX,y:pinDrag.startY},to:{x:p.x,y:p.y}}); markProjectDirty({immediate:true}); } pinDrag=null; }
 
-      if (tool==='eraser' && erasing){ const items = Array.from(erasingDeleted.values()); if (items.length){ pushUndo({type:'stroke-delete-batch', items}); } erasing=false; erasingDeleted=null; }
+      if (tool==='eraser' && erasing){ const items = Array.from(erasingDeleted.values()); if (items.length){ pushUndo({type:'stroke-delete-batch', items}); markProjectDirty({immediate:true}); } erasing=false; erasingDeleted=null; }
 
-      if (strokeUndoPending){ const st=deepCopy(strokes[strokes.length-1]); pushUndo({type:'stroke-add',stroke:st}); strokeUndoPending=false; }
-      drawing=false; updatePanels(); last=null; drawCursorPreview(lastMovePos);
+      if (strokeUndoPending){ const st=deepCopy(strokes[strokes.length-1]); pushUndo({type:'stroke-add',stroke:st}); strokeUndoPending=false; markProjectDirty({immediate:true}); }
+      drawing=false; updatePanels(); last=null; queuePresenceSync(); drawCursorPreview(lastMovePos);
     }
 
     // Zoom & grid
@@ -585,10 +760,91 @@
     // Selection
     function pointInRect(sx,sy,r){ return sx>=r.x&&sy>=r.y&&sx<=r.x+r.w&&sy<=r.y+r.h; }
     function rectToScreen(r){ const a=worldToScreen(Math.min(r.x0,r.x1),Math.min(r.y0,r.y1)); const b=worldToScreen(Math.max(r.x0,r.x1),Math.max(r.y0,r.y1)); return {x:a.x,y:a.y,w:b.x-a.x,h:b.y-a.y}; }
-    function drawSelection(){ ctxO.setTransform(dpr,0,0,dpr,0,0); ctxO.clearRect(0,0,overlay.width/dpr,overlay.height/dpr); if(!sel) return; const r=rectToScreen(sel); ctxO.save(); ctxO.strokeStyle='#7c7cff'; ctxO.setLineDash([6,4]); ctxO.lineWidth=2; ctxO.strokeRect(r.x,r.y,r.w,r.h); ctxO.fillStyle='#7c7cff22'; ctxO.fillRect(r.x,r.y,r.w,r.h); ctxO.restore(); }
+    function drawRemotePresence(){
+      for (const [clientId, remote] of remoteClients.entries()){
+        if (!remote) continue;
+        const hasPoint = Number.isFinite(remote.x) && Number.isFinite(remote.y);
+        if (remote.stroke && Array.isArray(remote.stroke.points) && remote.stroke.points.length){
+          ctxO.save();
+          ctxO.setLineDash([]);
+          ctxO.lineJoin='round';
+          ctxO.lineCap='round';
+          ctxO.lineWidth = remote.stroke.useWorld ? ((remote.stroke.sizeWorld || 1) * s) : (remote.stroke.sizeScreenPx || 1);
+          ctxO.strokeStyle = remote.stroke.color || remote.color || '#7c7cff';
+          ctxO.globalAlpha = Math.max(0, Math.min(1, remote.stroke.alpha ?? 1));
+          ctxO.beginPath();
+          remote.stroke.points.forEach((pt, index)=>{
+            const screen = worldToScreen(pt.x, pt.y);
+            if (index===0) ctxO.moveTo(screen.x, screen.y);
+            else ctxO.lineTo(screen.x, screen.y);
+          });
+          ctxO.stroke();
+          ctxO.restore();
+        }
+        if (!hasPoint) continue;
+        const screen = worldToScreen(remote.x, remote.y);
+        const radius = Math.max(6, cursorPreviewRadiusPxFor(remote.tool, remote));
+        ctxO.save();
+        ctxO.lineWidth = 1.5;
+        ctxO.strokeStyle = remote.color || '#7c7cff';
+        ctxO.fillStyle = remote.color || '#7c7cff';
+        ctxO.globalAlpha = 0.95;
+        ctxO.setLineDash(remote.tool==='eraser' ? [6,6] : []);
+        ctxO.beginPath();
+        ctxO.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+        ctxO.stroke();
+        ctxO.beginPath();
+        ctxO.arc(screen.x, screen.y, 3, 0, Math.PI * 2);
+        ctxO.fill();
+        ctxO.setLineDash([]);
+        ctxO.font = '12px system-ui';
+        ctxO.textBaseline = 'bottom';
+        const label = remoteClientLabel(clientId);
+        const metrics = ctxO.measureText(label);
+        const labelX = screen.x + radius + 8;
+        const labelY = screen.y - radius - 4;
+        ctxO.fillStyle = 'rgba(15,17,21,0.86)';
+        ctxO.fillRect(labelX - 4, labelY - 16, metrics.width + 8, 18);
+        ctxO.fillStyle = remote.color || '#7c7cff';
+        ctxO.fillText(label, labelX, labelY - 2);
+        ctxO.restore();
+      }
+    }
+    function drawLocalCursorPreview(pos){
+      if(!pos || tool==='select') return;
+      const px=(tool==='pencil')? (brushMode==='screen'? brushScreenPx : brushWorldPx*s) : (brushMode==='screen'? eraserScreenPx : eraserWorldPx*s);
+      const r=px/2;
+      ctxO.save();
+      ctxO.beginPath();
+      ctxO.arc(pos.x,pos.y,r,0,Math.PI*2);
+      if (tool==='pencil'){ if (alphaPct>=0){ ctxO.strokeStyle=color; ctxO.globalAlpha = Math.min(1, alphaPct/100); ctxO.setLineDash([]); } else { ctxO.strokeStyle='#ffffffbb'; ctxO.globalAlpha = Math.min(1, Math.abs(alphaPct/100)); ctxO.setLineDash([6,6]); } ctxO.lineWidth=1.5; }
+      else if (tool==='eraser'){ ctxO.strokeStyle='#ffffffbb'; ctxO.lineWidth=1.5; ctxO.setLineDash([6,6]); ctxO.globalAlpha=1; }
+      else if (tool==='picker'){ ctxO.strokeStyle='#7c7cff'; ctxO.lineWidth=1.5; ctxO.setLineDash([2,3]); ctxO.globalAlpha=1; }
+      ctxO.stroke();
+      ctxO.restore();
+    }
+    function drawSelection(){ renderOverlay(); }
+    function renderOverlay(){
+      ctxO.setTransform(dpr,0,0,dpr,0,0);
+      ctxO.clearRect(0,0,overlay.width/dpr,overlay.height/dpr);
+      if (sel){
+        const r=rectToScreen(sel);
+        ctxO.save();
+        ctxO.strokeStyle='#7c7cff';
+        ctxO.setLineDash([6,4]);
+        ctxO.lineWidth=2;
+        ctxO.strokeRect(r.x,r.y,r.w,r.h);
+        ctxO.fillStyle='#7c7cff22';
+        ctxO.fillRect(r.x,r.y,r.w,r.h);
+        ctxO.restore();
+      }
+      drawRemotePresence();
+      drawLocalCursorPreview(lastMovePos);
+    }
+    function drawCursorPreview(pos){ if (pos !== undefined) lastMovePos = pos; renderOverlay(); }
     function computeSelectionItems(r){ r.items={strokes:new Set(),pins:new Set()}; for(let i=0;i<strokes.length;i++){ const st=strokes[i]; for(const p of st.points){ const sc=worldToScreen(p.x,p.y); if(pointInRect(sc.x,sc.y,rectToScreen(r))){ r.items.strokes.add(i); break; } } } for(let i=0;i<pins.length;i++){ const p=pins[i]; const sc=worldToScreen(p.x,p.y); if(pointInRect(sc.x,sc.y,rectToScreen(r))) r.items.pins.add(i); } }
     function moveSelectionPreview(r,dx,dy){ if(!r.items) computeSelectionItems(r); for(const i of r.items.strokes){ for(const p of strokes[i].points){ p.x+=dx; p.y+=dy; } } for(const i of r.items.pins){ pins[i].x+=dx; pins[i].y+=dy; } r.moving.startX+=dx*s; r.moving.startY+=dy*s; redrawAll(); }
-    function finalizeMoveSelection(r,dx,dy){ if(!r.items) computeSelectionItems(r); pushUndo({type:'sel-move',delta:{dx,dy},items:snapshotItemIndices(r)}); }
+    function finalizeMoveSelection(r,dx,dy){ if(!r.items) computeSelectionItems(r); pushUndo({type:'sel-move',delta:{dx,dy},items:snapshotItemIndices(r)}); if (dx||dy) markProjectDirty({immediate:true}); }
     function snapshotItemIndices(r){ return { strokes:Array.from(r.items.strokes), pins:Array.from(r.items.pins) }; }
     function captureSelectionSnapshot(r){ return { items:snapshotItemIndices(r), strokes:deepCopy(strokes.filter((_,i)=>r.items.strokes.has(i))), pins:deepCopy(pins.filter((_,i)=>r.items.pins.has(i))) }; }
     function deleteSelection(r){ const keepStroke=strokes.map((_,i)=>!r.items.strokes.has(i)); for(let i=strokes.length-1;i>=0;i--) if(!keepStroke[i]) strokes.splice(i,1); const keepPin=pins.map((_,i)=>!r.items.pins.has(i)); for(let i=pins.length-1;i>=0;i--) if(!keepPin[i]) pins.splice(i,1); }
@@ -613,44 +869,49 @@
       return Array.from(name).slice(0,80).join('');
     }
     function localProjectFileName(){ const base=sanitizeProjectName(onlineNameInput.value||currentProjectName||'projekt') || 'projekt'; return base+'.json'; }
-    function applyProjectData(data){
-      if(data.view){ s=data.view.s||1; tx=data.view.tx||0; ty=data.view.ty||0; }
+    function applyProjectData(data, options={}){
+      const preserveView = !!options.preserveView;
+      const preserveEditorSettings = !!options.preserveEditorSettings;
+      if(data.view && !preserveView){ s=data.view.s||1; tx=data.view.tx||0; ty=data.view.ty||0; }
       if(Array.isArray(data.strokes)){ strokes.length=0; for(const st of data.strokes){ if(st.useWorld===undefined){ st.useWorld=!!st.sizeWorld; } if (st.alpha==null) st.alpha=1; strokes.push(st); } }
       if(Array.isArray(data.pins)){ pins.length=0; for(const p of data.pins) pins.push(p); }
       const hasPalette=Array.isArray(data.palette);
       if(hasPalette){ palette.length=0; for(const c of data.palette) palette.push(c); }
+      if (palette.length && !preserveEditorSettings){ activePaletteIndex=Math.max(0, Math.min(activePaletteIndex, palette.length-1)); }
       if(data.settings){
         const cfg=data.settings;
-        if(cfg.color!=null){ color=cfg.color; $('#color').value=color; }
-        if(hasPalette && cfg.activePaletteIndex!=null){ activePaletteIndex=Math.max(0,Math.min(cfg.activePaletteIndex,palette.length-1)); }
-        if(cfg.brushMode!=null){ brushMode=cfg.brushMode; brushUnit.value=brushMode; }
-        if(cfg.brushScreenPx!=null) brushScreenPx=cfg.brushScreenPx;
-        if(cfg.brushWorldPx!=null) brushWorldPx=cfg.brushWorldPx;
-        if(cfg.eraserScreenPx!=null) eraserScreenPx=cfg.eraserScreenPx;
-        if(cfg.eraserWorldPx!=null) eraserWorldPx=cfg.eraserWorldPx;
-        if(cfg.alphaPct!=null){ alphaPct=cfg.alphaPct; $('#alpha').value=alphaPct; }
-        if(cfg.gridLock50!=null){ gridLock50=cfg.gridLock50; $('#gridLock').checked=gridLock50; }
-        if(cfg.pinColor!=null){ pinColor=cfg.pinColor; $('#pinColor').value=pinColor; }
-        if(cfg.pinSizePx!=null){ pinSizePx=cfg.pinSizePx; $('#pinSize').value=pinSizePx; document.getElementById('pinSizeOut').textContent=pinSizePx+' px'; }
-        if(cfg.touchDraw!=null){ touchDraw=!!cfg.touchDraw; $('#touchDraw').checked=touchDraw; }
+        if(cfg.color!=null && !preserveEditorSettings){ color=cfg.color; $('#color').value=color; }
+        if(hasPalette && cfg.activePaletteIndex!=null && !preserveEditorSettings){ activePaletteIndex=Math.max(0,Math.min(cfg.activePaletteIndex,palette.length-1)); }
+        if(cfg.brushMode!=null && !preserveEditorSettings){ brushMode=cfg.brushMode; brushUnit.value=brushMode; }
+        if(cfg.brushScreenPx!=null && !preserveEditorSettings) brushScreenPx=cfg.brushScreenPx;
+        if(cfg.brushWorldPx!=null && !preserveEditorSettings) brushWorldPx=cfg.brushWorldPx;
+        if(cfg.eraserScreenPx!=null && !preserveEditorSettings) eraserScreenPx=cfg.eraserScreenPx;
+        if(cfg.eraserWorldPx!=null && !preserveEditorSettings) eraserWorldPx=cfg.eraserWorldPx;
+        if(cfg.alphaPct!=null && !preserveEditorSettings){ alphaPct=cfg.alphaPct; $('#alpha').value=alphaPct; }
+        if(cfg.gridLock50!=null && !preserveEditorSettings){ gridLock50=cfg.gridLock50; $('#gridLock').checked=gridLock50; }
+        if(cfg.pinColor!=null && !preserveEditorSettings){ pinColor=cfg.pinColor; $('#pinColor').value=pinColor; }
+        if(cfg.pinSizePx!=null && !preserveEditorSettings){ pinSizePx=cfg.pinSizePx; $('#pinSize').value=pinSizePx; document.getElementById('pinSizeOut').textContent=pinSizePx+' px'; }
+        if(cfg.touchDraw!=null && !preserveEditorSettings){ touchDraw=!!cfg.touchDraw; $('#touchDraw').checked=touchDraw; }
         if(cfg.bgColor!=null){ bgColor=cfg.bgColor; $('#bgColor').value=bgColor; document.documentElement.style.setProperty('--bg', bgColor); }
       }
       $('#brush').value=pxToExpSlider(brushMode==='screen'?brushScreenPx:brushWorldPx);
       $('#eraser').value=pxToExpSlider(brushMode==='screen'?eraserScreenPx:eraserWorldPx);
       updateBrushOut();
-      if(hasPalette){ color=palette[activePaletteIndex]; $('#color').value=color; }
+      if(hasPalette && !preserveEditorSettings){ color=palette[activePaletteIndex]; $('#color').value=color; }
       renderPalette();
       redoStack.length=0; undoStack.length=0; selectedPin=-1; clearSelection(); redrawAll(); updatePanels();
     }
     function saveProject(){ const data=collectProjectData(); const blob=new Blob([JSON.stringify(data)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=localProjectFileName(); a.click(); URL.revokeObjectURL(a.href); }
-    function loadProject(e){ const file=e.target.files[0]; if(!file) return; const fr=new FileReader(); fr.onload=()=>{ try{ applyProjectData(JSON.parse(fr.result)); currentProjectName=file.name.replace(/\.json$/i,''); onlineNameInput.value=currentProjectName; }catch(err){ alert('Hibás fájl.'); } }; fr.readAsText(file); e.target.value=''; }
+    function loadProject(e){ const file=e.target.files[0]; if(!file) return; const fr=new FileReader(); fr.onload=()=>{ try{ applyProjectData(JSON.parse(fr.result)); currentProjectName=file.name.replace(/\.json$/i,''); onlineNameInput.value=currentProjectName; updateOnlineSyncState('', 0); }catch(err){ alert('Hibás fájl.'); } }; fr.readAsText(file); e.target.value=''; }
     function setOnlineUiState(available, message){
       onlineAvailable = available;
       $('#saveOnline').disabled = !available;
       $('#refreshOnline').disabled = false;
       onlineList.disabled = !available || !onlineFiles.length;
       $('#loadOnline').disabled = !available || !onlineList.value;
-      onlineStatus.textContent = message;
+      if (!hasActiveOnlineProject() || !available || message.includes('hiba') || message.includes('nem érhető') || message.includes('internetkapcsolat')){
+        setSyncStatus(message);
+      }
     }
     function renderOnlineFiles(preferredName=''){
       const selected = preferredName || currentProjectName || onlineList.value;
@@ -696,18 +957,45 @@
         setOnlineUiState(false, fallback);
       }
     }
-    async function saveProjectOnline(){
-      const requestedName=sanitizeProjectName(onlineNameInput.value||currentProjectName);
+    async function saveProjectOnline({ silent=false } = {}){
+      const baseName = silent ? getSharedProjectName() : sanitizeProjectName(onlineNameInput.value||currentProjectName);
+      const requestedName=sanitizeProjectName(baseName);
       if(!requestedName){ alert('Adj meg egy online fájlnevet.'); onlineNameInput.focus(); return; }
+      if (autosavePending){
+        if (!silent){
+          queuedManualSave = true;
+          setSyncStatus('Online mentés: várakozás az előző mentésre…');
+        }
+        return;
+      }
+      autosavePending = true;
+      if (!silent) queuedManualSave = false;
       try{
-        setOnlineUiState(false,'Online mentés: mentés folyamatban…');
-        const result = await requestOnline('save', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name: requestedName, project: collectProjectData() }) });
+        if (!silent) setOnlineUiState(false,'Online mentés: mentés folyamatban…');
+        const result = await requestOnline('save', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name: requestedName, clientId: syncClientId, project: collectProjectData() }) });
         currentProjectName = result.name || requestedName;
+        currentProjectRevision = Number(result.revision || currentProjectRevision || 0);
         onlineNameInput.value = currentProjectName;
-        await refreshOnlineFiles({force:true});
+        updateOnlineSyncState(currentProjectName, currentProjectRevision);
+        syncDirty = false;
+        if (!silent) await refreshOnlineFiles({force:true});
       }catch(err){
-        setOnlineUiState(false, 'Online mentés: hiba');
-        alert(err.message);
+        if (!silent){
+          setOnlineUiState(false, 'Online mentés: hiba');
+          alert(err.message);
+        } else {
+          setSyncStatus('Online szinkron: mentési hiba');
+        }
+      }finally{
+        autosavePending = false;
+        if (queuedManualSave){
+          queuedManualSave = false;
+          saveProjectOnline();
+          return;
+        }
+        if (syncDirty && hasActiveOnlineProject() && silent){
+          markProjectDirty();
+        }
       }
     }
     async function loadSelectedOnlineProject(){
@@ -717,7 +1005,9 @@
         const result = await requestOnline('load', { query:{ name } });
         applyProjectData(result.project);
         currentProjectName = result.name || name;
+        currentProjectRevision = Number(result.revision || 0);
         onlineNameInput.value = currentProjectName;
+        updateOnlineSyncState(currentProjectName, currentProjectRevision);
         renderOnlineFiles(currentProjectName);
       }catch(err){
         alert(err.message);
@@ -801,7 +1091,6 @@
     function drawGridIntoContext(c,x0,y0,w,h,scale){ const targetMinorPx=32; const worldMinor=chooseNiceStep(targetMinorPx/scale); const worldMajor=worldMinor*10; c.strokeStyle='rgba(255,255,255,0.06)'; c.lineWidth=1; c.beginPath(); for(let x=Math.floor(x0/worldMinor)*worldMinor;x<x0+w;x+=worldMinor){ c.moveTo(x-x0,0); c.lineTo(x-x0,h);} for(let y=Math.floor(y0/worldMinor)*worldMinor;y<y0+h;y+=worldMinor){ c.moveTo(0,y-y0); c.lineTo(w,y-y0);} c.stroke(); c.strokeStyle='rgba(255,255,255,0.12)'; c.lineWidth=1.5; c.beginPath(); for(let x=Math.floor(x0/worldMajor)*worldMajor;x<x0+w;x+=worldMajor){ c.moveTo(x-x0,0); c.lineTo(x-x0,h);} for(let y=Math.floor(y0/worldMajor)*worldMajor;y<y0+h;y+=worldMajor){ c.moveTo(0,y-y0); c.lineTo(w,y-y0);} c.stroke(); }
 
     function sampleColorAt(sx,sy){ const x=Math.floor(sx*dpr), y=Math.floor(sy*dpr); const img=draw.getContext('2d').getImageData(x,y,1,1).data; if(img[3]===0) return null; const toHex=v=>v.toString(16).padStart(2,'0'); return '#'+toHex(img[0])+toHex(img[1])+toHex(img[2]); }
-    function drawCursorPreview(pos){ ctxO.setTransform(dpr,0,0,dpr,0,0); ctxO.clearRect(0,0,overlay.width/dpr,overlay.height/dpr); if(!pos) return; if (tool==='select') return; const px=(tool==='pencil')? (brushMode==='screen'? brushScreenPx : brushWorldPx*s) : (brushMode==='screen'? eraserScreenPx : eraserWorldPx*s); const r=px/2; ctxO.save(); ctxO.beginPath(); ctxO.arc(pos.x,pos.y,r,0,Math.PI*2); if (tool==='pencil'){ if (alphaPct>=0){ ctxO.strokeStyle=color; ctxO.globalAlpha = Math.min(1, alphaPct/100); ctxO.setLineDash([]); } else { ctxO.strokeStyle='#ffffffbb'; ctxO.globalAlpha = Math.min(1, Math.abs(alphaPct/100)); ctxO.setLineDash([6,6]); } ctxO.lineWidth=1.5; } else if (tool==='eraser'){ ctxO.strokeStyle='#ffffffbb'; ctxO.lineWidth=1.5; ctxO.setLineDash([6,6]); ctxO.globalAlpha=1; } else if (tool==='picker'){ ctxO.strokeStyle='#7c7cff'; ctxO.lineWidth=1.5; ctxO.setLineDash([2,3]); ctxO.globalAlpha=1; } ctxO.stroke(); ctxO.restore(); }
 
     // Undo/Redo
     function doUndo(){ if(!undoStack.length) return; const a=undoStack.pop(); switch(a.type){
@@ -813,7 +1102,7 @@
       case 'sel-delete':{ const {strokes:stSnap,pins:pinSnap}=a.snapshot; for(const st of stSnap) strokes.push(st); for(const p of pinSnap) pins.push(p); redoStack.push({type:'sel-delete',snapshot:deepCopy(a.snapshot)}); redrawAll(); break; }
       case 'stroke-delete-batch':{ const items=[...a.items].sort((x,y)=>x.index-y.index); for(const it of items){ const ins=(it.index<=strokes.length)? it.index : strokes.length; strokes.splice(ins,0,deepCopy(it.stroke)); } redoStack.push({type:'stroke-delete-batch', items: deepCopy(a.items)}); redrawAll(); break; }
       default: break;
-    }}
+    } markProjectDirty({immediate:true}); }
 
     function doRedo(){ if(!redoStack.length) return; const a=redoStack.pop(); switch(a.type){
       case 'stroke-add': strokes.push(deepCopy(a.stroke)); break;
@@ -824,7 +1113,7 @@
       case 'sel-delete': break;
       case 'stroke-delete-batch': { const indices=[]; for (const it of a.items){ const idx=findStrokeIndexByIdentity(it.stroke); indices.push(idx); } indices.sort((x,y)=>y-x); for (const idx of indices){ if (idx>=0) strokes.splice(idx,1); } break; }
       default: break;
-    } redrawAll(); }
+    } redrawAll(); markProjectDirty({immediate:true}); }
 
     function findStrokeIndexByIdentity(st){ for (let i=strokes.length-1;i>=0;i--){ const t=strokes[i]; if (t && t.mode===st.mode && t.color===st.color && !!t.useWorld===!!st.useWorld && (t.sizeWorld||0)===(st.sizeWorld||0) && (t.sizeScreenPx||0)===(st.sizeScreenPx||0) && t.points.length===st.points.length){ return i; } } return -1; }
 
