@@ -260,6 +260,7 @@
     let autosaveTimer = null;
     let autosavePending = false;
     let queuedManualSave = false;
+    let pendingRemoteRevision = 0;
     let syncDirty = false;
     let syncApplyInProgress = false;
     let lastCursorWorld = null;
@@ -285,12 +286,23 @@
     const pushUndo = (action)=>{ undoStack.push(action); redoStack.length=0; };
     function getSharedProjectName(){ return activeOnlineProjectName || ''; }
     function hasActiveOnlineProject(){ return !!getSharedProjectName(); }
+    function normalizeRevision(value, fallback=0){
+      const normalizedFallback = Number.isFinite(Number(fallback)) && Number(fallback) >= 0 ? Number(fallback) : 0;
+      const revision = Number(value);
+      return Number.isFinite(revision) && revision >= 0 ? revision : normalizedFallback;
+    }
     function setSyncStatus(message){
       lastSyncStatusText = message;
       onlineStatus.textContent = message;
     }
     function remoteClientLabel(clientId){ return 'Társ ' + clientId.slice(-4).toUpperCase(); }
     function clearRemotePresence(){ remoteClients.clear(); renderOverlay(); }
+    function isLocalEditInProgress(){
+      const hasPendingCanvasEdit = drawing || strokeUndoPending || erasing;
+      const hasPendingObjectMove = !!pinDrag || !!(sel && sel.moving);
+      const hasPendingSave = syncDirty || autosavePending || !!autosaveTimer;
+      return hasPendingCanvasEdit || hasPendingObjectMove || hasPendingSave;
+    }
     function markProjectDirty({ immediate=false } = {}){
       if (syncApplyInProgress) return;
       syncDirty = true;
@@ -303,7 +315,8 @@
     }
     function updateOnlineSyncState(name, revision=0){
       activeOnlineProjectName = name || '';
-      currentProjectRevision = Number.isFinite(revision) ? revision : 0;
+      currentProjectRevision = normalizeRevision(revision, 0);
+      pendingRemoteRevision = 0;
       syncDirty = false;
       if (!activeOnlineProjectName){
         if (autosaveTimer) clearTimeout(autosaveTimer);
@@ -379,6 +392,25 @@
       }
       return payload;
     }
+    async function applyPendingSharedProject(targetRevision){
+      targetRevision = normalizeRevision(targetRevision, currentProjectRevision);
+      if (targetRevision <= currentProjectRevision || syncApplyInProgress) return false;
+      if (isLocalEditInProgress()){
+        pendingRemoteRevision = Math.max(pendingRemoteRevision, targetRevision);
+        return false;
+      }
+      const loaded = await requestOnline('load', { query:{ name:getSharedProjectName() } });
+      syncApplyInProgress = true;
+      try{
+        applyProjectData(loaded.project, { preserveView:true, preserveEditorSettings:true });
+      }finally{
+        syncApplyInProgress = false;
+      }
+      currentProjectRevision = normalizeRevision(loaded.revision, targetRevision);
+      pendingRemoteRevision = 0;
+      syncDirty = false;
+      return true;
+    }
     async function syncOnlinePresence(){
       if (!hasActiveOnlineProject() || syncRequestPending) return;
       syncRequestPending = true;
@@ -399,19 +431,15 @@
           remoteClients.set(client.clientId, client);
         }
         renderOverlay();
-        const nextRevision = Number(result.revision || 0);
-        if (nextRevision > currentProjectRevision && !syncApplyInProgress){
-          const loaded = await requestOnline('load', { query:{ name:getSharedProjectName() } });
-          syncApplyInProgress = true;
-          try{
-            applyProjectData(loaded.project, { preserveView:true, preserveEditorSettings:true });
-          }finally{
-            syncApplyInProgress = false;
-          }
-          currentProjectRevision = Number(loaded.revision || nextRevision || currentProjectRevision);
-          syncDirty = false;
+        const nextRevision = normalizeRevision(result.revision, 0);
+        // If we already deferred a newer remote revision while local edits were pending,
+        // keep tracking that freshest revision instead of downgrading to the latest poll result.
+        const targetRevision = Math.max(nextRevision, pendingRemoteRevision);
+        if (targetRevision > currentProjectRevision){
+          await applyPendingSharedProject(targetRevision);
         } else if (nextRevision){
           currentProjectRevision = nextRevision;
+          pendingRemoteRevision = 0;
         }
         const others = clients.filter(client => client && client.clientId !== syncClientId).length;
         setSyncStatus(`Online szinkron: aktív${others ? ` (${others + 1} megnyitás)` : ''}`);
@@ -974,10 +1002,11 @@
         if (!silent) setOnlineUiState(false,'Online mentés: mentés folyamatban…');
         const result = await requestOnline('save', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name: requestedName, clientId: syncClientId, project: collectProjectData() }) });
         currentProjectName = result.name || requestedName;
-        currentProjectRevision = Number(result.revision || currentProjectRevision || 0);
+        currentProjectRevision = normalizeRevision(result.revision, currentProjectRevision);
         onlineNameInput.value = currentProjectName;
         updateOnlineSyncState(currentProjectName, currentProjectRevision);
         syncDirty = false;
+        pendingRemoteRevision = 0;
         if (!silent) await refreshOnlineFiles({force:true});
       }catch(err){
         if (!silent){
@@ -995,6 +1024,10 @@
         }
         if (syncDirty && hasActiveOnlineProject() && silent){
           markProjectDirty();
+        } else if (pendingRemoteRevision > currentProjectRevision && hasActiveOnlineProject()){
+          // A deferred remote revision can be applied only after the local save finished
+          // and there are no more pending local edits to preserve.
+          queuePresenceSync();
         }
       }
     }
@@ -1005,7 +1038,7 @@
         const result = await requestOnline('load', { query:{ name } });
         applyProjectData(result.project);
         currentProjectName = result.name || name;
-        currentProjectRevision = Number(result.revision || 0);
+        currentProjectRevision = normalizeRevision(result.revision, 0);
         onlineNameInput.value = currentProjectName;
         updateOnlineSyncState(currentProjectName, currentProjectRevision);
         renderOnlineFiles(currentProjectName);
