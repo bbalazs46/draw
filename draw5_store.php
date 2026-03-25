@@ -14,6 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 $dataDir = __DIR__ . DIRECTORY_SEPARATOR . 'draw5_store_data';
 $maxRequestBytes = 25 * 1024 * 1024;
+const PRESENCE_STROKE_POINTS_LIMIT = 160;
 
 respond(handleRequest($dataDir, $maxRequestBytes));
 
@@ -304,7 +305,7 @@ function sanitizePresenceStroke(mixed $value): ?array
 
     $rawPoints = is_array($value['points'] ?? null) ? $value['points'] : [];
     $points = [];
-    foreach (array_slice($rawPoints, -160) as $point) {
+    foreach (array_slice($rawPoints, -PRESENCE_STROKE_POINTS_LIMIT) as $point) {
         if (!is_array($point)) {
             continue;
         }

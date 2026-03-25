@@ -241,9 +241,15 @@
     let currentProjectName = '';
     let activeOnlineProjectName = '';
     let currentProjectRevision = 0;
-    const syncClientId = (window.crypto && typeof window.crypto.randomUUID === 'function')
-      ? window.crypto.randomUUID()
-      : ('client-' + Math.random().toString(36).slice(2) + Date.now().toString(36));
+    const syncClientId = (() => {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+      if (window.crypto && typeof window.crypto.getRandomValues === 'function'){
+        const bytes = new Uint32Array(4);
+        window.crypto.getRandomValues(bytes);
+        return 'client-' + Array.from(bytes, value => value.toString(36)).join('-');
+      }
+      return 'client-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    })();
     const remoteClients = new Map();
     const SYNC_POLL_MS = 250;
     const AUTOSAVE_DEBOUNCE_MS = 700;
@@ -552,11 +558,11 @@
             const blob=new Blob(recChunks,{type:mediaRecorder.mimeType});
             const name='felvetel_'+new Date().toISOString().replace(/[:.]/g,'-')+(blob.type.includes('webm')?'.webm':'.ogg');
             const dataUrl=await blobToDataURL(blob);
-             if (recordingPinIndex!=null&&pins[recordingPinIndex]){ const p=pins[recordingPinIndex]; p.name=name; p.type=blob.type; p.dataUrl=dataUrl; drawPins(); }
-             else { pendingPinFile={name,type:blob.type,dataUrl}; setTool('pin'); }
-             markProjectDirty({immediate:true});
-             setRecordingUI(false); for (const t of stream.getTracks()) t.stop(); recordingPinIndex=null;
-           };
+            if (recordingPinIndex!=null&&pins[recordingPinIndex]){ const p=pins[recordingPinIndex]; p.name=name; p.type=blob.type; p.dataUrl=dataUrl; drawPins(); }
+            else { pendingPinFile={name,type:blob.type,dataUrl}; setTool('pin'); }
+            markProjectDirty({immediate:true});
+            setRecordingUI(false); for (const t of stream.getTracks()) t.stop(); recordingPinIndex=null;
+          };
           mediaRecorder.start(); recStart=Date.now(); setRecordingUI(true);
           recTimer=setInterval(()=>{ const t=Math.floor((Date.now()-recStart)/1000); recStatus.textContent='REC '+fmtTime(t); },250);
           setTool('pin');
