@@ -252,12 +252,14 @@
     })();
     const remoteClients = new Map();
     const SYNC_POLL_MS = 250;
+    const SYNC_IDLE_POLL_MS = 800;
     const AUTOSAVE_DEBOUNCE_MS = 700;
     const LIVE_STROKE_POINTS_LIMIT = 160;
     let syncTimer = null;
     let syncRequestPending = false;
     let autosaveTimer = null;
     let autosavePending = false;
+    let queuedManualSave = false;
     let syncDirty = false;
     let syncApplyInProgress = false;
     let lastCursorWorld = null;
@@ -335,10 +337,11 @@
     function scheduleNextPresenceSync(){
       if (!hasActiveOnlineProject()) return;
       if (syncTimer) clearTimeout(syncTimer);
+      const delay = remoteClients.size || drawing ? SYNC_POLL_MS : SYNC_IDLE_POLL_MS;
       syncTimer = setTimeout(()=>{
         syncTimer = null;
         syncOnlinePresence();
-      }, SYNC_POLL_MS);
+      }, delay);
     }
     function cursorPreviewRadiusPxFor(toolName, presence){
       if (toolName==='pencil'){
@@ -397,7 +400,7 @@
         }
         renderOverlay();
         const nextRevision = Number(result.revision || 0);
-        if (nextRevision > currentProjectRevision){
+        if (nextRevision > currentProjectRevision && !syncApplyInProgress){
           const loaded = await requestOnline('load', { query:{ name:getSharedProjectName() } });
           syncApplyInProgress = true;
           try{
@@ -768,7 +771,7 @@
           ctxO.lineCap='round';
           ctxO.lineWidth = remote.stroke.useWorld ? ((remote.stroke.sizeWorld || 1) * s) : (remote.stroke.sizeScreenPx || 1);
           ctxO.strokeStyle = remote.stroke.color || remote.color || '#7c7cff';
-          ctxO.globalAlpha = Math.max(0, Math.min(1, remote.stroke.alpha == null ? 1 : remote.stroke.alpha));
+          ctxO.globalAlpha = Math.max(0, Math.min(1, remote.stroke.alpha ?? 1));
           ctxO.beginPath();
           remote.stroke.points.forEach((pt, index)=>{
             const screen = worldToScreen(pt.x, pt.y);
@@ -874,7 +877,7 @@
       if(Array.isArray(data.pins)){ pins.length=0; for(const p of data.pins) pins.push(p); }
       const hasPalette=Array.isArray(data.palette);
       if(hasPalette){ palette.length=0; for(const c of data.palette) palette.push(c); }
-      if (palette.length){ activePaletteIndex=Math.max(0,Math.min(activePaletteIndex,palette.length-1)); }
+      if (palette.length && !preserveEditorSettings){ activePaletteIndex=Math.max(0, Math.min(activePaletteIndex, palette.length-1)); }
       if(data.settings){
         const cfg=data.settings;
         if(cfg.color!=null && !preserveEditorSettings){ color=cfg.color; $('#color').value=color; }
@@ -958,8 +961,15 @@
       const baseName = silent ? getSharedProjectName() : sanitizeProjectName(onlineNameInput.value||currentProjectName);
       const requestedName=sanitizeProjectName(baseName);
       if(!requestedName){ alert('Adj meg egy online fájlnevet.'); onlineNameInput.focus(); return; }
-      if (autosavePending) return;
+      if (autosavePending){
+        if (!silent){
+          queuedManualSave = true;
+          setSyncStatus('Online mentés: várakozás az előző mentésre…');
+        }
+        return;
+      }
       autosavePending = true;
+      if (!silent) queuedManualSave = false;
       try{
         if (!silent) setOnlineUiState(false,'Online mentés: mentés folyamatban…');
         const result = await requestOnline('save', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name: requestedName, clientId: syncClientId, project: collectProjectData() }) });
@@ -978,6 +988,11 @@
         }
       }finally{
         autosavePending = false;
+        if (queuedManualSave){
+          queuedManualSave = false;
+          saveProjectOnline();
+          return;
+        }
         if (syncDirty && hasActiveOnlineProject() && silent){
           markProjectDirty();
         }

@@ -15,6 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 $dataDir = __DIR__ . DIRECTORY_SEPARATOR . 'draw5_store_data';
 $maxRequestBytes = 25 * 1024 * 1024;
 const PRESENCE_STROKE_POINTS_LIMIT = 160;
+const PRESENCE_TTL_SECONDS = 15;
 
 respond(handleRequest($dataDir, $maxRequestBytes));
 
@@ -172,7 +173,6 @@ function updatePresence(string $dataDir, int $maxRequestBytes): array
     }
 
     $now = time();
-    $ttl = 15;
     $sanitizedEntries = [];
     foreach ($entries as $entry) {
         if (!is_array($entry)) {
@@ -181,7 +181,7 @@ function updatePresence(string $dataDir, int $maxRequestBytes): array
         $entryClientId = sanitizeClientId($entry['clientId'] ?? '');
         $entryState = sanitizePresenceState($entry['state'] ?? null);
         $updatedAt = (int) ($entry['updatedAt'] ?? 0);
-        if ($entryClientId === null || $entryState === null || $updatedAt < ($now - $ttl)) {
+        if ($entryClientId === null || $entryState === null || $updatedAt < ($now - PRESENCE_TTL_SECONDS)) {
             continue;
         }
         $sanitizedEntries[$entryClientId] = [
@@ -257,7 +257,7 @@ function sanitizeClientId(mixed $value): ?string
     }
 
     $value = trim($value);
-    if ($value === '' || strlen($value) > 120) {
+    if ($value === '' || strlen($value) > 120 || str_contains($value, '..')) {
         return null;
     }
 
