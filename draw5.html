@@ -302,7 +302,7 @@
         autosaveTimer = null;
         clearRemotePresence();
         stopRealtimeSync();
-        if (onlineAvailable) setSyncStatus(lastSyncStatusText || 'Online mentés: elérhető');
+        if (onlineAvailable) setSyncStatus('Online mentés: elérhető');
         return;
       }
       startRealtimeSync();
@@ -394,8 +394,11 @@
         if (nextRevision > currentProjectRevision){
           const loaded = await requestOnline('load', { query:{ name:getSharedProjectName() } });
           syncApplyInProgress = true;
-          applyProjectData(loaded.project, { preserveView:true, preserveEditorSettings:true });
-          syncApplyInProgress = false;
+          try{
+            applyProjectData(loaded.project, { preserveView:true, preserveEditorSettings:true });
+          }finally{
+            syncApplyInProgress = false;
+          }
           currentProjectRevision = Number(loaded.revision || nextRevision || currentProjectRevision);
           syncDirty = false;
         } else if (nextRevision){
@@ -865,6 +868,7 @@
       if(Array.isArray(data.pins)){ pins.length=0; for(const p of data.pins) pins.push(p); }
       const hasPalette=Array.isArray(data.palette);
       if(hasPalette){ palette.length=0; for(const c of data.palette) palette.push(c); }
+      if (palette.length){ activePaletteIndex=Math.max(0,Math.min(activePaletteIndex,palette.length-1)); }
       if(data.settings){
         const cfg=data.settings;
         if(cfg.color!=null && !preserveEditorSettings){ color=cfg.color; $('#color').value=color; }
