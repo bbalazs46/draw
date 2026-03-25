@@ -260,6 +260,7 @@
     let autosaveTimer = null;
     let autosavePending = false;
     let queuedManualSave = false;
+    let pendingRemoteRevision = 0;
     let syncDirty = false;
     let syncApplyInProgress = false;
     let lastCursorWorld = null;
@@ -291,6 +292,9 @@
     }
     function remoteClientLabel(clientId){ return 'Társ ' + clientId.slice(-4).toUpperCase(); }
     function clearRemotePresence(){ remoteClients.clear(); renderOverlay(); }
+    function hasPendingLocalSyncWork(){
+      return drawing || strokeUndoPending || erasing || !!pinDrag || !!(sel && sel.moving) || syncDirty || autosavePending || !!autosaveTimer;
+    }
     function markProjectDirty({ immediate=false } = {}){
       if (syncApplyInProgress) return;
       syncDirty = true;
@@ -304,6 +308,7 @@
     function updateOnlineSyncState(name, revision=0){
       activeOnlineProjectName = name || '';
       currentProjectRevision = Number.isFinite(revision) ? revision : 0;
+      pendingRemoteRevision = 0;
       syncDirty = false;
       if (!activeOnlineProjectName){
         if (autosaveTimer) clearTimeout(autosaveTimer);
@@ -379,6 +384,24 @@
       }
       return payload;
     }
+    async function applyPendingSharedProject(nextRevision){
+      if (nextRevision <= currentProjectRevision || syncApplyInProgress) return false;
+      if (hasPendingLocalSyncWork()){
+        pendingRemoteRevision = Math.max(pendingRemoteRevision, nextRevision);
+        return false;
+      }
+      const loaded = await requestOnline('load', { query:{ name:getSharedProjectName() } });
+      syncApplyInProgress = true;
+      try{
+        applyProjectData(loaded.project, { preserveView:true, preserveEditorSettings:true });
+      }finally{
+        syncApplyInProgress = false;
+      }
+      currentProjectRevision = Number(loaded.revision || nextRevision || currentProjectRevision);
+      pendingRemoteRevision = 0;
+      syncDirty = false;
+      return true;
+    }
     async function syncOnlinePresence(){
       if (!hasActiveOnlineProject() || syncRequestPending) return;
       syncRequestPending = true;
@@ -400,18 +423,12 @@
         }
         renderOverlay();
         const nextRevision = Number(result.revision || 0);
-        if (nextRevision > currentProjectRevision && !syncApplyInProgress){
-          const loaded = await requestOnline('load', { query:{ name:getSharedProjectName() } });
-          syncApplyInProgress = true;
-          try{
-            applyProjectData(loaded.project, { preserveView:true, preserveEditorSettings:true });
-          }finally{
-            syncApplyInProgress = false;
-          }
-          currentProjectRevision = Number(loaded.revision || nextRevision || currentProjectRevision);
-          syncDirty = false;
+        const targetRevision = Math.max(nextRevision, pendingRemoteRevision);
+        if (targetRevision > currentProjectRevision){
+          await applyPendingSharedProject(targetRevision);
         } else if (nextRevision){
           currentProjectRevision = nextRevision;
+          pendingRemoteRevision = 0;
         }
         const others = clients.filter(client => client && client.clientId !== syncClientId).length;
         setSyncStatus(`Online szinkron: aktív${others ? ` (${others + 1} megnyitás)` : ''}`);
@@ -978,6 +995,7 @@
         onlineNameInput.value = currentProjectName;
         updateOnlineSyncState(currentProjectName, currentProjectRevision);
         syncDirty = false;
+        pendingRemoteRevision = 0;
         if (!silent) await refreshOnlineFiles({force:true});
       }catch(err){
         if (!silent){
@@ -995,6 +1013,10 @@
         }
         if (syncDirty && hasActiveOnlineProject() && silent){
           markProjectDirty();
+          return;
+        }
+        if (pendingRemoteRevision > currentProjectRevision && hasActiveOnlineProject()){
+          queuePresenceSync();
         }
       }
     }
