@@ -280,7 +280,7 @@ function sanitizePresenceState(mixed $value): ?array
         'tool' => $tool,
         'drawing' => !empty($value['drawing']),
         'color' => sanitizeHexColor($value['color'] ?? null) ?? '#7c7cff',
-        'alpha' => clampFloat(sanitizeFiniteNumber($value['alpha'] ?? 1.0) ?? 1.0, -1.0, 1.0),
+        'alpha' => clampFloat(sanitizeFiniteNumber($value['alpha'] ?? 1.0) ?? 1.0, 0.0, 1.0),
         'useWorld' => !empty($value['useWorld']),
         'sizeWorld' => sanitizeFiniteNumber($value['sizeWorld'] ?? null),
         'sizeScreenPx' => sanitizeFiniteNumber($value['sizeScreenPx'] ?? null),
@@ -322,7 +322,7 @@ function sanitizePresenceStroke(mixed $value): ?array
 
     return [
         'color' => sanitizeHexColor($value['color'] ?? null) ?? '#7c7cff',
-        'alpha' => clampFloat(sanitizeFiniteNumber($value['alpha'] ?? 1.0) ?? 1.0, -1.0, 1.0),
+        'alpha' => clampFloat(sanitizeFiniteNumber($value['alpha'] ?? 1.0) ?? 1.0, 0.0, 1.0),
         'useWorld' => !empty($value['useWorld']),
         'sizeWorld' => sanitizeFiniteNumber($value['sizeWorld'] ?? null),
         'sizeScreenPx' => sanitizeFiniteNumber($value['sizeScreenPx'] ?? null),

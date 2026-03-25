@@ -762,7 +762,7 @@
           ctxO.lineCap='round';
           ctxO.lineWidth = remote.stroke.useWorld ? ((remote.stroke.sizeWorld || 1) * s) : (remote.stroke.sizeScreenPx || 1);
           ctxO.strokeStyle = remote.stroke.color || remote.color || '#7c7cff';
-          ctxO.globalAlpha = Math.min(1, Math.abs(remote.stroke.alpha == null ? 1 : remote.stroke.alpha));
+          ctxO.globalAlpha = Math.max(0, Math.min(1, remote.stroke.alpha == null ? 1 : remote.stroke.alpha));
           ctxO.beginPath();
           remote.stroke.points.forEach((pt, index)=>{
             const screen = worldToScreen(pt.x, pt.y);
@@ -852,7 +852,7 @@
     async function openPin(idx){ const p=pins[idx]; if(!p) return; if(p.password){ const given=prompt('Add meg a jelszót a megnyitáshoz:'); if(given!==p.password){ alert('Hibás jelszó.'); return; } } if(!p.dataUrl){ alert('Ez a pin még nem tartalmaz fájlt.'); return; } if (p.type && p.type.startsWith('audio/')){ lbName.textContent=p.name||'Felvétel'; lbContent.innerHTML=''; const audio=document.createElement('audio'); audio.controls=true; audio.autoplay=true; audio.src=p.dataUrl; audio.style.width='min(80vw,720px)'; lbContent.appendChild(audio); lb.classList.add('open'); lbJustOpenedAt=Date.now(); return; } const w=window.open(p.dataUrl,'_blank'); if(!w) alert('A böngésző blokkolta a megnyitást.'); }
 
     // Export / Save
-    function collectProjectData(){ return {version:16, view:{s,tx,ty}, strokes, pins, palette, settings:{color,activePaletteIndex,brushMode,brushScreenPx,brushWorldPx,eraserScreenPx,eraserWorldPx,alphaPct,gridLock50,pinColor,pinSizePx,touchDraw,bgColor}}; }
+    function collectProjectData(){ return {version:15, view:{s,tx,ty}, strokes, pins, palette, settings:{color,activePaletteIndex,brushMode,brushScreenPx,brushWorldPx,eraserScreenPx,eraserWorldPx,alphaPct,gridLock50,pinColor,pinSizePx,touchDraw,bgColor}}; }
     function sanitizeProjectName(value){
       let name=(value||'').trim();
       if(!name || name.includes('..')) return '';
